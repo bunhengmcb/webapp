@@ -1,0 +1,34 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "mcb-inventory-v96-rc4-staging",
+	"main": "dist/server/index.js",
+	"compatibility_date": "2026-08-29",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"workers_dev": true,
+	"preview_urls": true,
+	"vars": {
+		"ENVIRONMENT": "staging",
+		"RELEASE_VERSION": "V96-RC5"
+	},
+	"assets": {
+		"directory": "dist/client"
+	},
+	"observability": {
+		"enabled": true
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "mcb-inventory-v96-rc4-staging-db",
+			"database_id": "e8b4641e-4c4e-47a0-b848-0fccc13b98de"
+		}
+	],
+	"r2_buckets": [
+		{
+			"bucket_name": "mcb-inventory-v96-rc4-staging-r2",
+			"binding": "BUCKET"
+		}
+	]
+}

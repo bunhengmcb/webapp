@@ -1,0 +1,26 @@
+MCB INVENTORY MANAGEMENT SYSTEM
+COMPLETE FOUNDATION SOURCE PACKAGE
+Version: V43.18 FINAL FOUNDATION BASELINE
+
+Merged source lineage:
+V43.1 full source
+V43.2 Online Auth
+V43.3 Login Page
+V43.4 Approved Login UX/UI
+V43.5 Sample Match Login
+V43.6 Login Refinement
+V43.7 Approved Register UX/UI
+V43.8 Developer Login
+V43.9 Cloudflare PBKDF2 Compatibility
+V43.10 Registration Approval
+V43.11 Approval Link
+V43.12 Approval State Fix
+V43.13 Admin Role Constraint Fix
+V43.14 RBAC
+V43.15 Security Hardening
+V43.16 Audit Log
+V43.17 Data Storage & Backup Foundation
+V43.18 Foundation Finalization
+
+Database migration chain included: 0000 through 0008.
+No Cloudflare API token or other secret is included in this archive.

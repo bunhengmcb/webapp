@@ -1,0 +1,12 @@
+MCB INVENTORY CONTROL - FINAL SOURCE BACKUP
+
+Package version: 94
+Prepared: 2026-08-27
+Source commit: 2c84dcd2b9c86a4c5ad4e9c9497373ca0354e129
+Live site: https://mcb-inventory-mvp.dream14gaming.chatgpt.site
+
+This package contains the restored Version 86-style UI together with the
+newer functions, role/site-access improvements, and solid popup correction.
+
+The package contains source code and configuration. Runtime data stored by the
+live application is not embedded in this source-code ZIP.

@@ -1,0 +1,14 @@
+MCB V43.6 STAGING — sample-match login refinement
+
+Replace only:
+  app/login/page.tsx
+  app/login/login.module.css
+
+No dashboard, D1, auth, or inventory logic changes.
+
+Build:
+  npx vinext build
+Deploy:
+  npx @vinext/cloudflare deploy --name mcb-inventory-staging
+Review:
+  https://mcb-inventory-staging.bunhengmcb.workers.dev/login

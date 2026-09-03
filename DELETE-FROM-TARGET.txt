@@ -1,0 +1,6 @@
+drizzle/0003_auth_sessions.sql
+drizzle/0004_username_auth.sql
+drizzle/0005_registration_requests.sql
+drizzle/0006_registration_role_admin.sql
+drizzle/0007_security_hardening.sql
+drizzle/0008_audit_security_events.sql
