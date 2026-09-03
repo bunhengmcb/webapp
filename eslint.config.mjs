@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Exclude archived legacy source tree from active linting
+    "MCB-Inventory-System-Source-v43/**",
   ]),
 ]);
 

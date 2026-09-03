@@ -82,6 +82,8 @@ type StatePayload = {
     createdBy?: string;
     decidedBy?: string;
     status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Approved" | "Rejected";
+    countType?: "MONTHLY_FULL" | "CYCLE";
+    snapshotAt?: string;
     lines: Array<{
       code: string;
       systemQty: number;
@@ -596,6 +598,8 @@ function validState(value: unknown): value is StatePayload {
         !["Draft", "Pending Recount", "Recount", "Pending", "Approved", "Rejected"].includes(
           session.status,
         ) ||
+        (session.countType != null && !["MONTHLY_FULL", "CYCLE"].includes(session.countType)) ||
+        (session.status !== "Draft" && (!session.snapshotAt || isNaN(Date.parse(session.snapshotAt)))) ||
         !Array.isArray(session.lines) ||
         session.lines.some(
           (line) =>
@@ -911,6 +915,10 @@ function operationsStockValid(
 
   const touchedSites = new Set(siteAccess);
   for (const site of Object.keys(expected)) {
+    // Prevent negative expected stock values
+    for (const code of Object.keys(expected[site] ?? {})) {
+      if ((expected[site]?.[code] ?? 0) < 0) return false;
+    }
     if (!touchedSites.has(site)) {
       if (changed(previous.stock[site], next.stock[site])) return false;
       continue;
@@ -937,6 +945,8 @@ function operationsCountsValid(
   return modified.every((session) => {
     const before = previous.stockCounts.find((item) => item.id === session.id);
     if (!before) return ["Draft", "Pending Recount", "Pending"].includes(session.status);
+    // snapshotAt must be immutable once set
+    if (before.snapshotAt && session.snapshotAt && before.snapshotAt !== session.snapshotAt) return false;
     const countFlowValid =
       (before.status === "Draft" && ["Draft", "Pending Recount", "Pending"].includes(session.status)) ||
       (before.status === "Pending Recount" && session.status === "Recount") ||
@@ -1185,6 +1195,11 @@ function managementCountApprovalValid(
       !changed(previous.stock, next.stock) &&
       !changed(previous.transactions, next.transactions)
     );
+  // For approval, allow intervening stock movements but require posted variance transactions
+  // to reconcile from the current stock to the final counted quantity. The original
+  // snapshot `systemQty` is preserved in the session object and must not be modified.
+  if (!before) return false;
+  if (!previous.stock[decision.site]) return false;
   const expected = decision.lines.filter(
       (line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty,
     ),
@@ -1192,15 +1207,22 @@ function managementCountApprovalValid(
       (transaction) =>
         !previous.transactions.some((item) => item.id === transaction.id),
     );
-  return (
-    decision.lines.every(
-      (line) =>
-        next.stock[decision.site]?.[line.code] ===
-        (line.recountQty ?? line.physicalQty ?? line.systemQty),
-    ) &&
-    added.length === expected.length &&
-    added.every((transaction) => transaction.type === "STOCK COUNT VARIANCE")
-  );
+  if (added.length !== expected.length) return false;
+  // Verify each expected variance has a matching variance transaction with correct qty/previous/new quantities
+  for (const line of expected) {
+    const finalQty = line.recountQty ?? line.physicalQty ?? line.systemQty;
+    const tx = added.find((t) => t.type === "STOCK COUNT VARIANCE" && t.code === line.code && t.site === decision.site && Number.isFinite(t.qty));
+    if (!tx) return false;
+    // Transaction should record the stock immediately before posting (previous stock), and the new final qty.
+    const prevStock = previous.stock[decision.site]?.[line.code] ?? 0;
+    if (tx.previousQty != null && tx.previousQty !== prevStock) return false;
+    if (tx.newQty != null && tx.newQty !== finalQty) return false;
+    if (Math.abs(tx.qty - (finalQty - prevStock)) > 1e-9) return false;
+    if (tx.reference != null && tx.reference !== decision.id) return false;
+    // Ensure next.stock reflects previous stock plus this transaction
+    if ((next.stock[decision.site]?.[line.code] ?? 0) !== prevStock + tx.qty) return false;
+  }
+  return true;
 }
 
 function actionName(previous: StatePayload, next: StatePayload) {

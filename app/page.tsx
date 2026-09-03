@@ -9,7 +9,7 @@ type View =
   | "Item Master"
   | "BOM Control"
   | "Current Stock"
-  | "Stock Count"
+  | "Physical Count"
   | "Stock In"
   | "Stock Out"
   | "Site Transfer"
@@ -154,6 +154,7 @@ type StockCountSession = {
   createdAt: string;
   createdBy: string;
   status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Approved" | "Rejected";
+  countType?: "Monthly Full Count" | "Cycle Count";
   lines: Array<{ code: string; systemQty: number; physicalQty: number | null; recountQty?: number | null }>;
   submittedAt?: string;
   decidedAt?: string;
@@ -536,7 +537,7 @@ const roleViews: Record<Role, View[]> = {
     "Dashboard",
     "Item Master",
     "Current Stock",
-    "Stock Count",
+    "Physical Count",
     "Transactions",
     "Audit Report",
     "Reports",
@@ -550,7 +551,7 @@ const roleViews: Record<Role, View[]> = {
     "Dashboard",
     "BOM Control",
     "Current Stock",
-    "Stock Count",
+    "Physical Count",
     "Stock In",
     "Stock Out",
     "Site Transfer",
@@ -564,7 +565,7 @@ const roleViews: Record<Role, View[]> = {
   Stockkeeper: [
     "Dashboard",
     "Current Stock",
-    "Stock Count",
+    "Physical Count",
     "Stock In",
     "Site Transfer",
     "Equipment",
@@ -592,7 +593,7 @@ const roleViews: Record<Role, View[]> = {
     "Dashboard",
     "BOM Control",
     "Current Stock",
-    "Stock Count",
+    "Physical Count",
     "Transactions",
     "Reports",
     "Alerts",
@@ -602,7 +603,7 @@ const roleViews: Record<Role, View[]> = {
     "Dashboard",
     "BOM Control",
     "Current Stock",
-    "Stock Count",
+    "Physical Count",
     "Transactions",
     "Audit Report",
     "Reports",
@@ -1286,7 +1287,7 @@ export default function Home() {
     allowedOperations = operationViews.filter((v) => allowed.includes(v)),
     mobileViews: Record<Role, View[]> = {
       Developer: ["Dashboard", "Current Stock", "User Access", "Alerts", "Help & SOP"],
-      Admin: ["Dashboard", "Current Stock", "Stock Count", "Alerts", "Help & SOP"],
+      Admin: ["Dashboard", "Current Stock", "Physical Count", "Alerts", "Help & SOP"],
       "Stock Controller": ["Dashboard", "Stock In", "Stock Out", "Site Transfer", "Alerts"],
       Stockkeeper: ["Dashboard", "Stock In", "Site Transfer", "Equipment", "Alerts"],
       "Site Team": ["Dashboard", "Current Stock", "Alerts", "Help & SOP"],
@@ -1520,7 +1521,7 @@ export default function Home() {
               flash={flash}
             />
           )}
-          {view === "Stock Count" && (
+          {view === "Physical Count" && (
             <StockCountModule
               sessions={stockCounts}
               setSessions={setStockCounts}
@@ -3195,9 +3196,12 @@ function StockCountModule({
   flash: (message: string) => void;
 }) {
   const [site, setSite] = useState(accessibleSites[0] ?? ""),
-    [activeId, setActiveId] = useState(""),
-    [note, setNote] = useState(""),
-    [report, setReport] = useState<StockCountSession | null>(null);
+    [countType, setCountType] = useState<"MONTHLY_FULL" | "CYCLE">("MONTHLY_FULL"),
+    [activeId, setActiveId] = useState("") ,
+    [note, setNote] = useState("") ,
+    [report, setReport] = useState<StockCountSession | null>(null),
+    [filter, setFilter] = useState<"All" | "Uncounted" | "Variance" | "Completed">("All"),
+    [searchQ, setSearchQ] = useState("");
   const active = sessions.find((session) => session.id === activeId);
   const canCount = ["Developer", "Stock Controller", "Stockkeeper"].includes(role);
   const canApprove = ["Stock Controller", "Developer"].includes(role);
@@ -3205,6 +3209,7 @@ function StockCountModule({
     const session: StockCountSession = {
       id: `COUNT-${nowDate().replaceAll("-", "")}-${String(sessions.length + 1).padStart(3, "0")}`,
       site,
+      countType,
       createdAt: new Date().toISOString(),
       createdBy: user,
       status: "Draft",
@@ -3222,7 +3227,7 @@ function StockCountModule({
     };
     setSessions((list) => [session, ...list]);
     setActiveId(session.id);
-    flash("Stock count session created");
+    flash("Physical count session created");
   }
   function setPhysical(code: string, value: string) {
     setSessions((list) =>
@@ -3250,18 +3255,20 @@ function StockCountModule({
       return;
     }
     const hasVariance = active.lines.some((line) => line.physicalQty !== line.systemQty);
+    const now = new Date().toISOString();
     setSessions((list) =>
       list.map((session) =>
         session.id === active.id
           ? {
               ...session,
               status: hasVariance ? "Pending Recount" : "Pending",
-              submittedAt: new Date().toISOString(),
+              submittedAt: now,
+              snapshotAt: now,
             }
           : session,
       ),
     );
-    flash(hasVariance ? "First count submitted. Variance-only recount required." : "Count submitted for Stock Controller review");
+    flash(hasVariance ? "First count submitted. Variance-only recount required." : "Physical count submitted for Stock Controller review");
   }
   function startRecount() {
     if (!active || active.status !== "Pending Recount") return;
@@ -3306,38 +3313,41 @@ function StockCountModule({
       decisionNote: note.trim(),
     };
     if (approved) {
+      // Create variance transactions that reconcile current stock to final counted qty.
+      const varianceTransactions = active.lines
+        .filter(
+          (line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty,
+        )
+        .map((line) => {
+          const final = line.recountQty ?? line.physicalQty ?? line.systemQty;
+          const previousQty = (stock[active.site]?.[line.code] ?? line.systemQty);
+          return {
+            id: uid(),
+            date: nowDate(),
+            type: "STOCK COUNT VARIANCE",
+            site: active.site,
+            other: "",
+            code: line.code,
+            qty: final - previousQty,
+            by: user,
+            status: "Approved",
+            reference: active.id,
+            reason: note.trim(),
+            timestamp: new Date().toISOString(),
+            previousQty: previousQty,
+            newQty: final,
+          };
+        });
+      // Update stock to reflect variance transactions applied to current stock
       setStock((previous) => ({
         ...previous,
         [active.site]: {
           ...previous[active.site],
           ...Object.fromEntries(
-            active.lines.map((line) => [
-              line.code,
-              line.recountQty ?? line.physicalQty ?? line.systemQty,
-            ]),
+            varianceTransactions.map((tx) => [tx.code, (previous[active.site]?.[tx.code] ?? 0) + tx.qty]),
           ),
         },
       }));
-      const varianceTransactions = active.lines
-        .filter(
-          (line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty,
-        )
-        .map((line) => ({
-          id: uid(),
-          date: nowDate(),
-          type: "STOCK COUNT VARIANCE",
-          site: active.site,
-          other: "",
-          code: line.code,
-          qty: (line.recountQty ?? line.physicalQty ?? line.systemQty) - line.systemQty,
-          by: user,
-          status: "Approved",
-          reference: active.id,
-          reason: note.trim(),
-          timestamp: new Date().toISOString(),
-          previousQty: line.systemQty,
-          newQty: line.recountQty ?? line.physicalQty ?? line.systemQty,
-        }));
       setTransactions((list) => [...varianceTransactions, ...list]);
     }
     setSessions((list) =>
@@ -3377,15 +3387,37 @@ function StockCountModule({
                     <option key={value}>{value}</option>
                   ))}
                 </select>
+                <select value={countType} onChange={(e) => setCountType(e.target.value as "MONTHLY_FULL" | "CYCLE")}>
+                  <option value="MONTHLY_FULL">Monthly Full Count</option>
+                  <option value="CYCLE">Cycle Count</option>
+                </select>
                 <button className="primary" onClick={createSession}>
-                  + New count
+                  + New physical count
                 </button>
               </div>
             )}
           </div>
+          <div className="panel-subhead">
+            <div className="count-search">
+              <input placeholder="Search item code or name" value={searchQ} onChange={(e) => setSearchQ(e.target.value)} />
+            </div>
+            <div className="count-filters">
+              {(["All", "Uncounted", "Variance", "Completed"] as const).map((f) => (
+                <button key={f} className={filter === f ? "active" : ""} onClick={() => setFilter(f)}>{f}</button>
+              ))}
+            </div>
+          </div>
           {sessions.length ? (
             <div className="count-session-cards">
-              {sessions.map((session) => (
+              {sessions
+                .filter((s) => {
+                  if (filter === "Uncounted") return s.lines.some((l) => l.physicalQty == null);
+                  if (filter === "Variance") return s.lines.some((l) => (l.recountQty ?? l.physicalQty ?? l.systemQty) !== l.systemQty);
+                  if (filter === "Completed") return ["Approved", "Rejected"].includes(s.status);
+                  return true;
+                })
+                .filter((s) => !searchQ || s.id.includes(searchQ) || s.site.includes(searchQ) || s.lines.some((l) => l.code.includes(searchQ) || itemName(l.code).toLowerCase().includes(searchQ.toLowerCase())))
+                .map((session) => (
                 <button
                   key={session.id}
                   className={activeId === session.id ? "active" : ""}
@@ -3393,9 +3425,11 @@ function StockCountModule({
                 >
                   <strong>{session.id}</strong>
                   <span>
-                    {session.site} ·{" "}
-                    {new Date(session.createdAt).toLocaleDateString()}
+                    {session.site} · {session.countType === "CYCLE" ? "Cycle Count" : "Monthly Full Count"} · {new Date(session.createdAt).toLocaleDateString()}
                   </span>
+                  <small className="progress">
+                    {session.lines.filter((l) => l.physicalQty != null).length}/{session.lines.length} counted · {session.lines.filter((l) => (l.recountQty ?? l.physicalQty ?? l.systemQty) !== l.systemQty).length} variance
+                  </small>
                   <small
                     className={`status ${session.status === "Approved" ? "ok" : session.status === "Rejected" ? "danger" : "warn"}`}
                   >
@@ -3543,7 +3577,7 @@ function StockCountModule({
             onClick={(e) => e.stopPropagation()}
           >
             <div className="count-report-print">
-              <h2>MCB Stock Count Variance Report</h2>
+              <h2>MCB Physical Count Variance Report</h2>
               <p>
                 {report.id} · Site {report.site} ·{" "}
                 {new Date(report.createdAt).toLocaleDateString()}
