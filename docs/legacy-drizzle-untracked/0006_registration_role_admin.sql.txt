@@ -1,0 +1,32 @@
+-- V43.13: allow Admin as a requested role in approved registration profiles.
+-- Developer intentionally remains excluded from employee registration.
+
+PRAGMA foreign_keys = OFF;
+
+CREATE TABLE registration_profiles_v4313 (
+  user_id TEXT PRIMARY KEY NOT NULL,
+  employee_id TEXT NOT NULL,
+  phone TEXT NOT NULL,
+  site TEXT NOT NULL,
+  requested_role TEXT NOT NULL CHECK (requested_role IN ('Storekeeper','QS','Management','Admin')),
+  note TEXT NOT NULL DEFAULT '',
+  submitted_at TEXT NOT NULL,
+  approved_at TEXT,
+  approved_by TEXT
+);
+
+INSERT INTO registration_profiles_v4313
+  (user_id,employee_id,phone,site,requested_role,note,submitted_at,approved_at,approved_by)
+SELECT
+  user_id,employee_id,phone,site,requested_role,note,submitted_at,approved_at,approved_by
+FROM registration_profiles;
+
+DROP TABLE registration_profiles;
+ALTER TABLE registration_profiles_v4313 RENAME TO registration_profiles;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registration_profiles_employee_id
+  ON registration_profiles(employee_id);
+CREATE INDEX IF NOT EXISTS idx_registration_profiles_site
+  ON registration_profiles(site);
+
+PRAGMA foreign_keys = ON;

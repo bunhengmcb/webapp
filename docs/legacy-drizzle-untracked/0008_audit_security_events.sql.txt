@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS security_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  occurred_at TEXT NOT NULL,
+  action TEXT NOT NULL,
+  username TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT '',
+  ip_hint TEXT NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  detail TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_security_events_time ON security_events(occurred_at);
+CREATE INDEX IF NOT EXISTS idx_security_events_action ON security_events(action);

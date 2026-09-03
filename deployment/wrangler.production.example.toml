@@ -1,0 +1,12 @@
+name = "mcb-inventory-production"
+compatibility_date = "2026-08-25"
+
+[vars]
+APP_ENV = "production"
+DB_ENV = "production"
+
+# Create a NEW production D1 database. Never paste the staging database_id here.
+[[d1_databases]]
+binding = "DB"
+database_name = "mcb-inventory-production"
+database_id = "PASTE_NEW_PRODUCTION_DATABASE_ID"

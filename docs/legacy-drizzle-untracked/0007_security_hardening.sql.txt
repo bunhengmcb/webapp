@@ -1,0 +1,10 @@
+CREATE TABLE IF NOT EXISTS login_attempts (
+  id TEXT PRIMARY KEY NOT NULL,
+  attempt_key TEXT NOT NULL,
+  username TEXT NOT NULL,
+  success INTEGER NOT NULL CHECK (success IN (0,1)),
+  occurred_at TEXT NOT NULL,
+  user_agent TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_key_time ON login_attempts(attempt_key, occurred_at);
+CREATE INDEX IF NOT EXISTS idx_login_attempts_time ON login_attempts(occurred_at);

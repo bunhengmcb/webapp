@@ -1,0 +1,2 @@
+# V96 Release Gate
+A build may be labelled LIVE VERIFIED only after: dependency-resolved production build; static regression; authentication and role/site authorization runtime tests; core Stock In/Out/BOM/Transfer/Physical Count runtime tests; migration preview with no unresolved rejects and opening stock sourced only from verified Physical Count; backup/restore verification; staging desktop+phone smoke test; production deploy matching approved RC and post-deploy health checks. Until then use WORKING / RC labels only.

@@ -1,0 +1,12 @@
+name = "mcb-inventory-staging"
+compatibility_date = "2026-08-25"
+
+[vars]
+APP_ENV = "staging"
+DB_ENV = "staging"
+
+# Keep the existing D1 database_id from your current working wrangler config.
+[[d1_databases]]
+binding = "DB"
+database_name = "mcb-inventory-staging"
+database_id = "PASTE_EXISTING_STAGING_DATABASE_ID"

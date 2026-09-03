@@ -1,0 +1,24 @@
+CREATE TABLE IF NOT EXISTS registration_requests (
+  request_id TEXT PRIMARY KEY NOT NULL,
+  name TEXT NOT NULL,
+  username TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  password_iterations INTEGER NOT NULL,
+  employee_id TEXT,
+  phone TEXT NOT NULL DEFAULT '',
+  site TEXT NOT NULL,
+  requested_role TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'Pending',
+  submitted_at TEXT NOT NULL,
+  reviewed_at TEXT,
+  reviewed_by TEXT
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registration_requests_pending_username
+ON registration_requests(username)
+WHERE status='Pending';
+--> statement-breakpoint
+CREATE UNIQUE INDEX IF NOT EXISTS idx_registration_requests_pending_employee
+ON registration_requests(employee_id)
+WHERE status='Pending' AND employee_id IS NOT NULL AND employee_id<>'';
