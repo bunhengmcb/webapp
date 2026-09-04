@@ -67,7 +67,16 @@ type StatePayload = {
     location: string;
     manager: string;
     startDate: string;
-    status: "Active" | "Closed";
+    status:
+  | "Active"
+  | "On Progress"
+  | "Handover"
+  | "Defect"
+  | "Not Active";
+costCodeStandard: "Standard" | "Non-Standard";
+plannedCompletionDate?: string;
+actualCompletionDate?: string;
+remarks?: string;
   }>;
   costCodeLinks: Array<{ costCode: string; itemCode: string }>;
   suppliers: Array<{
@@ -105,6 +114,7 @@ const defaultSites: StatePayload["sites"] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
   {
     code: "SSP",
@@ -113,6 +123,7 @@ const defaultSites: StatePayload["sites"] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
   {
     code: "FPF",
@@ -121,6 +132,7 @@ const defaultSites: StatePayload["sites"] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
   {
     code: "WH",
@@ -129,6 +141,7 @@ const defaultSites: StatePayload["sites"] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
 ];
 const defaultCostCodeLinks: StatePayload["costCodeLinks"] = [
@@ -571,7 +584,10 @@ function validState(value: unknown): value is StatePayload {
       !/^[A-Z0-9-]{2,12}$/.test(site.code) ||
       siteCodes.has(site.code) ||
       !site.name?.trim() ||
-      !["Active", "Closed"].includes(site.status)
+      !!["Active", "On Progress", "Handover", "Defect", "Not Active"].includes(
+  site.status,
+) ||
+!["Standard", "Non-Standard"].includes(site.costCodeStandard)
     )
       return false;
     siteCodes.add(site.code);
@@ -1352,7 +1368,19 @@ export async function GET() {
           adjustments: Array.isArray(state.adjustments)
             ? state.adjustments
             : [],
-          sites: Array.isArray(state.sites) ? state.sites : defaultSites,
+          sites: Array.isArray(state.sites)
+  ? state.sites.map((site) => ({
+      ...site,
+      status:
+        String(site.status) === "Closed"
+          ? "Not Active"
+          : site.status,
+      costCodeStandard:
+        site.costCodeStandard === "Non-Standard"
+          ? "Non-Standard"
+          : "Standard",
+    }))
+  : defaultSites,
           costCodeLinks: Array.isArray(state.costCodeLinks)
             ? state.costCodeLinks
             : defaultCostCodeLinks,
@@ -1408,7 +1436,19 @@ export async function PUT(request: Request) {
               supplierIds: Array.isArray(item.supplierIds) ? item.supplierIds : ["SUP-001"],
             })),
             adjustments: Array.isArray(state.adjustments) ? state.adjustments : [],
-            sites: Array.isArray(state.sites) ? state.sites : defaultSites,
+            sites: Array.isArray(state.sites)
+  ? state.sites.map((site) => ({
+      ...site,
+      status:
+        String(site.status) === "Closed"
+          ? "Not Active"
+          : site.status,
+      costCodeStandard:
+        site.costCodeStandard === "Non-Standard"
+          ? "Non-Standard"
+          : "Standard",
+    }))
+  : defaultSites,
             costCodeLinks: Array.isArray(state.costCodeLinks) ? state.costCodeLinks : defaultCostCodeLinks,
             suppliers: Array.isArray(state.suppliers) ? state.suppliers : defaultSuppliers,
             stockCounts: Array.isArray(state.stockCounts) ? state.stockCounts : [],
@@ -1419,10 +1459,11 @@ export async function PUT(request: Request) {
       { status: 409 },
     );
   const parsedPrevious = JSON.parse(current.payload) as StatePayload;
-  const previous = {
-    ...parsedPrevious,
-    items: parsedPrevious.items.map((item) => ({
-      ...item,
+
+const previous: StatePayload = {
+  ...parsedPrevious,
+  items: parsedPrevious.items.map((item) => ({
+    ...item,
       supplierIds: Array.isArray(item.supplierIds)
         ? item.supplierIds
         : ["SUP-001"],
@@ -1431,9 +1472,19 @@ export async function PUT(request: Request) {
       ? parsedPrevious.adjustments
       : [],
     sites: Array.isArray(parsedPrevious.sites)
-      ? parsedPrevious.sites
-      : defaultSites,
-    costCodeLinks: Array.isArray(parsedPrevious.costCodeLinks)
+  ? parsedPrevious.sites.map((site) => ({
+      ...site,
+      status:
+        String(site.status) === "Closed"
+          ? "Not Active"
+          : site.status,
+      costCodeStandard:
+        site.costCodeStandard === "Non-Standard"
+          ? "Non-Standard"
+          : "Standard",
+    }))
+  : defaultSites,
+      costCodeLinks: Array.isArray(parsedPrevious.costCodeLinks)
       ? parsedPrevious.costCodeLinks
       : defaultCostCodeLinks,
     suppliers: Array.isArray(parsedPrevious.suppliers)
@@ -1444,7 +1495,46 @@ export async function PUT(request: Request) {
       : [],
   };
   const submitted = body.state as StatePayload;
-  const next = mergeScopedState(previous, submitted, user);
+const next = mergeScopedState(previous, submitted, user);
+
+// PROJECT LIFECYCLE GUARD
+const notActiveSites = new Set(
+  previous.sites
+    .filter((site) => site.status === "Not Active")
+    .map((site) => site.code),
+);
+
+const newTransactionsOnNotActiveSite = next.transactions.some(
+  (tx) =>
+    notActiveSites.has(tx.site || "") &&
+    !previous.transactions.some((oldTx) => oldTx.id === tx.id),
+);
+
+const newAdjustmentsOnNotActiveSite = next.adjustments.some(
+  (adjustment) =>
+    notActiveSites.has(adjustment.site) &&
+    !previous.adjustments.some((oldAdjustment) => oldAdjustment.id === adjustment.id),
+);
+
+const newCountsOnNotActiveSite = next.stockCounts.some(
+  (count) =>
+    notActiveSites.has(count.site) &&
+    !previous.stockCounts.some((oldCount) => oldCount.id === count.id),
+);
+
+if (
+  newTransactionsOnNotActiveSite ||
+  newAdjustmentsOnNotActiveSite ||
+  newCountsOnNotActiveSite
+) {
+  return Response.json(
+    {
+      error:
+        "Project/site is Not Active. New inventory operations are blocked.",
+    },
+    { status: 409 },
+  );
+}
   if (!newBomTransactionsValid(previous, next))
     return Response.json(
       { error: "Stock In/Out is blocked because the approved BOM would be exceeded or is not linked" },

@@ -27,28 +27,57 @@ async function contextFor(req: Request): Promise<StockOutContext> {
 function canUseSite(ctx: Exclude<StockOutContext, { error: Response }>, site: string) {
   return ctx.role === 'Developer' || ctx.siteAccess.includes('*') || ctx.siteAccess.includes(site);
 }
+async function siteIsOperational(db: D1Database, site: string) {
+  const row = await db
+    .prepare("SELECT payload FROM app_state WHERE id=1")
+    .first<{ payload: string }>();
 
-function uid() { return crypto.randomUUID(); }
+  if (!row?.payload) return true;
+
+  try {
+    const state = JSON.parse(row.payload) as {
+      sites?: Array<{ code?: string; status?: string }>;
+    };
+
+    const record = (state.sites || []).find(
+      (entry) => entry.code === site
+    );
+
+    return !record || record.status !== "Not Active";
+  } catch {
+    return true;
+  }
+}
+function uid() {
+  return crypto.randomUUID();
+}
 
 // Ensure table exists (for staging/demo). Real deployment should use migrations.
 async function ensureTable(db: D1Database) {
-  const cols = await db.prepare("PRAGMA table_info('stock_out_requests')").all();
+  const cols = await db
+    .prepare("PRAGMA table_info('stock_out_requests')")
+    .all();
+
   if (!cols.results || !cols.results.length) {
-    await db.prepare(`CREATE TABLE IF NOT EXISTS stock_out_requests (
-      id TEXT PRIMARY KEY,
-      site TEXT,
-      created_at TEXT,
-      created_by TEXT,
-      created_by_email TEXT,
-      status TEXT,
-      submitted_at TEXT,
-      verified_at TEXT,
-      verified_by TEXT,
-      posted_at TEXT,
-      posted_by TEXT,
-      reference TEXT,
-      payload TEXT
-    )`).run();
+    await db
+      .prepare(`
+        CREATE TABLE IF NOT EXISTS stock_out_requests (
+          id TEXT PRIMARY KEY,
+          site TEXT,
+          created_at TEXT,
+          created_by TEXT,
+          created_by_email TEXT,
+          status TEXT,
+          submitted_at TEXT,
+          verified_at TEXT,
+          verified_by TEXT,
+          posted_at TEXT,
+          posted_by TEXT,
+          reference TEXT,
+          payload TEXT
+        )
+      `)
+      .run();
   }
 }
 
@@ -62,7 +91,23 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as StockOutBody;
   if (!body || !body.site || !Array.isArray(body.rows) || !body.transactionDate) return Response.json({ error: 'Invalid payload' }, { status: 400 });
   if (ctx.role !== 'Stockkeeper' && ctx.role !== 'Developer') return Response.json({ error: 'Stockkeeper maker role required' }, { status: 403 });
-  if (!canUseSite(ctx, body.site)) return Response.json({ error: 'Site access denied' }, { status: 403 });
+  if (!canUseSite(ctx, body.site))
+  return Response.json(
+    { error: "Site access denied" },
+    { status: 403 }
+  );
+
+if (!(await siteIsOperational(db, body.site))) {
+  return Response.json(
+    {
+      error:
+        "Project/site is Not Active. New Stock Out requests are blocked.",
+    },
+    { status: 409 },
+  );
+}
+
+// existing POST code continues here
   const submittedRows = ctx.role === 'Stockkeeper' ? body.rows.map((line) => ({ ...line, costCode: '' })) : body.rows;
   const now = new Date().toISOString();
   const id = `SOREQ-${now.replace(/[^0-9]/g,'')}-${uid().slice(0,6)}`;
@@ -97,6 +142,15 @@ export async function PUT(request: Request) {
   const row = await db.prepare("SELECT id,site,created_by,status,payload,reference FROM stock_out_requests WHERE id=?").bind(id).first<{ id: string; site: string; created_by: string; status: string; payload: string; reference: string | null }>();
   if (!row) return Response.json({ error: 'Request not found' }, { status: 404 });
   if (!canUseSite(ctx, row.site)) return Response.json({ error: 'Site access denied' }, { status: 403 });
+  if (
+  (action === 'verify' || action === 'post') &&
+  !(await siteIsOperational(db, row.site))
+) {
+  return Response.json(
+    { error: 'Project/site is Not Active. Stock Out processing is blocked.' },
+    { status: 409 },
+  );
+}
   const now = new Date().toISOString();
   if (action === 'verify') {
     if (ctx.role !== 'Stock Controller' && ctx.role !== 'Developer') return Response.json({ error: 'Verifier role required' }, { status: 403 });

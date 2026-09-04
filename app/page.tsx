@@ -121,14 +121,31 @@ type SystemAudit = {
   toRevision: number;
   summary: string;
 };
+type ProjectStatus =
+  | "Active"
+  | "On Progress"
+  | "Handover"
+  | "Defect"
+  | "Not Active";
+
+type CostCodeStandard = "Standard" | "Non-Standard";
+
 type ProjectSite = {
   code: string;
   name: string;
   location: string;
   manager: string;
   startDate: string;
-  status: "Active" | "Closed";
+  plannedCompletionDate?: string;
+  actualCompletionDate?: string;
+  status: ProjectStatus;
+  costCodeStandard: CostCodeStandard;
+  remarks?: string;
 };
+
+const isOperationalProjectStatus = (status: ProjectStatus) =>
+  status !== "Not Active";
+
 type CostCodeLevel2 = { code: string; name: string; description: string };
 type CostCodeLevel3 = {
   code: string;
@@ -188,6 +205,7 @@ const initialSites: ProjectSite[] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
   {
     code: "SSP",
@@ -196,6 +214,7 @@ const initialSites: ProjectSite[] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
   {
     code: "FPF",
@@ -204,6 +223,7 @@ const initialSites: ProjectSite[] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
   {
     code: "WH",
@@ -212,6 +232,7 @@ const initialSites: ProjectSite[] = [
     manager: "",
     startDate: "",
     status: "Active",
+    costCodeStandard: "Standard",
   },
 ];
 let sites = initialSites.map((site) => site.code);
@@ -984,7 +1005,7 @@ export default function Home() {
         setSuppliers(shared.suppliers ?? initialSuppliers);
         setStockCounts(shared.stockCounts ?? []);
         sites = restoredSites
-          .filter((site) => site.status === "Active")
+          .filter((site) => isOperationalProjectStatus(site.status))
           .map((site) => site.code);
         setItemRevision((v) => v + 1);
         revisionRef.current = data.revision;
@@ -1069,7 +1090,7 @@ export default function Home() {
           setSuppliers(data.state.suppliers ?? initialSuppliers);
           setStockCounts(data.state.stockCounts ?? []);
           sites = restoredSites
-            .filter((site) => site.status === "Active")
+            .filter((site) => isOperationalProjectStatus(site.status))
             .map((site) => site.code);
           setItemRevision((v) => v + 1);
           revisionRef.current = data.revision;
@@ -2392,7 +2413,7 @@ function ItemMaster({
   });
   Object.entries(stock).forEach(([site, balances]) => Object.entries(balances).forEach(([code, qty]) => {
     if (qty < 0) qualityIssues.push({ area: "Stock", code: `${site} / ${code}`, issue: `Negative balance: ${formatQty(qty)}`, severity: "High" });
-    if (qty > 0 && siteRecords.find((record) => record.code === site)?.status === "Closed") qualityIssues.push({ area: "Site", code: `${site} / ${code}`, issue: `Closed site still holds ${formatQty(qty)} units`, severity: "Medium" });
+    if (qty > 0 && siteRecords.find((record) => record.code === site)?.status === "Not Active") qualityIssues.push({ area: "Site", code: `${site} / ${code}`, issue: `Not Active site still holds ... ${formatQty(qty)} units`, severity: "Medium" });
   }));
   const qualityScore = Math.max(0, Math.round(100 - (qualityIssues.length / Math.max(items.length, 1)) * 20));
   function openNew() {
@@ -8466,13 +8487,14 @@ function ProjectSiteMaster({
   canEdit: boolean;
 }) {
   const empty: ProjectSite = {
-    code: "",
-    name: "",
-    location: "",
-    manager: "",
-    startDate: "",
-    status: "Active",
-  };
+  code: "",
+  name: "",
+  location: "",
+  manager: "",
+  startDate: "",
+  status: "Active",
+  costCodeStandard: "Standard",
+};
   const [editingCode, setEditingCode] = useState(""),
     [draft, setDraft] = useState<ProjectSite>(empty),
     [error, setError] = useState("");
@@ -8500,7 +8522,7 @@ function ProjectSiteMaster({
       : [next, ...records];
     setRecords(updated);
     sites = updated
-      .filter((site) => site.status === "Active")
+      .filter((site) => isOperationalProjectStatus(site.status))
       .map((site) => site.code);
     if (!editingCode)
       setStock((previous) => ({
@@ -8521,24 +8543,29 @@ function ProjectSiteMaster({
     setDraft(site);
     setError("");
   };
-  const changeStatus = (record: ProjectSite) => {
-    if (
-      record.status === "Active" &&
-      records.filter((site) => site.status === "Active").length === 1
-    ) {
-      setError("At least one site must remain active");
-      return;
-    }
-    const status = record.status === "Active" ? "Closed" : "Active";
-    const updated = records.map((site) =>
-      site.code === record.code ? { ...site, status } : site,
-    ) as ProjectSite[];
-    setRecords(updated);
-    sites = updated
-      .filter((site) => site.status === "Active")
-      .map((site) => site.code);
-    flash(`${record.code} is now ${status.toLowerCase()}`);
-  };
+  const updateStatus = (record: ProjectSite, status: ProjectStatus) => {
+  if (record.status === status) return;
+
+  if (
+    status === "Not Active" &&
+    records.filter((site) => isOperationalProjectStatus(site.status)).length === 1
+  ) {
+    setError("At least one operational project/site must remain available");
+    return;
+  }
+
+  const updated = records.map((site) =>
+    site.code === record.code ? { ...site, status } : site,
+  ) as ProjectSite[];
+
+  setRecords(updated);
+
+  sites = updated
+    .filter((site) => isOperationalProjectStatus(site.status))
+    .map((site) => site.code);
+
+  flash(`${record.code} status changed to ${status}`);
+};
   return (
     <div className="site-master-layout">
       {canEdit && (
@@ -8569,20 +8596,79 @@ function ProjectSiteMaster({
             />
           </label>
           <label>
-            Project/site name
-            <input
-              required
-              value={draft.name}
-              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-            />
-          </label>
-          <label>
-            Location
-            <input
-              value={draft.location}
-              onChange={(e) => setDraft({ ...draft, location: e.target.value })}
-            />
-          </label>
+  Project Status
+  <select
+    value={draft.status}
+    onChange={(e) =>
+      setDraft({
+        ...draft,
+        status: e.target.value as ProjectStatus,
+      })
+    }
+  >
+    <option value="Active">Active</option>
+    <option value="On Progress">On Progress</option>
+    <option value="Handover">Handover</option>
+    <option value="Defect">Defect</option>
+    <option value="Not Active">Not Active</option>
+  </select>
+</label>
+<label>
+  Cost Code Standard
+  <select
+    value={draft.costCodeStandard}
+    onChange={(e) =>
+      setDraft({
+        ...draft,
+        costCodeStandard: e.target.value as CostCodeStandard,
+      })
+    }
+  >
+    <option value="Standard">Standard</option>
+    <option value="Non-Standard">Non-Standard</option>
+  </select>
+</label>
+<label>
+  Planned Completion Date
+  <input
+    type="date"
+    value={draft.plannedCompletionDate ?? ""}
+    onChange={(e) =>
+      setDraft({
+        ...draft,
+        plannedCompletionDate: e.target.value,
+      })
+    }
+  />
+</label>
+
+<label>
+  Actual Completion Date
+  <input
+    type="date"
+    value={draft.actualCompletionDate ?? ""}
+    onChange={(e) =>
+      setDraft({
+        ...draft,
+        actualCompletionDate: e.target.value,
+      })
+    }
+  />
+</label>
+
+<label>
+  Remarks
+  <textarea
+    value={draft.remarks ?? ""}
+    onChange={(e) =>
+      setDraft({
+        ...draft,
+        remarks: e.target.value,
+      })
+    }
+    rows={3}
+  />
+</label>
           <label>
             Site manager
             <input
@@ -8646,8 +8732,8 @@ function ProjectSiteMaster({
             </small>
           </div>
           <span className="record-count">
-            {records.filter((site) => site.status === "Active").length} active ·{" "}
-            {records.filter((site) => site.status === "Closed").length} closed
+            {records.filter((site) => isOperationalProjectStatus(site.status)).length} operational
+            {records.filter((site) => site.status === "Not Active").length} not active
           </span>
         </div>
         <div className="table-wrap">
@@ -8692,13 +8778,19 @@ function ProjectSiteMaster({
                         >
                           Edit
                         </button>
-                        <button
-                          type="button"
-                          className={`table-action ${site.status === "Active" ? "close-site" : "activate-site"}`}
-                          onClick={() => changeStatus(site)}
-                        >
-                          {site.status === "Active" ? "Close" : "Activate"}
-                        </button>
+                        <select
+  className="table-action"
+  value={site.status}
+  onChange={(e) =>
+    updateStatus(site, e.target.value as ProjectStatus)
+  }
+>
+  <option value="Active">Active</option>
+  <option value="On Progress">On Progress</option>
+  <option value="Handover">Handover</option>
+  <option value="Defect">Defect</option>
+  <option value="Not Active">Not Active</option>
+</select>
                       </div>
                     </td>
                   )}
@@ -8835,7 +8927,11 @@ function BackupRecovery({
   };
   type IntegrityIssue = { severity: "Critical" | "Warning"; area: string; record: string; detail: string };
   const duplicateValues = (values: string[]) => Array.from(new Set(values.filter((value, index) => values.indexOf(value) !== index)));
-  const activeSiteCodes = new Set(siteRecords.filter((site) => site.status === "Active").map((site) => site.code));
+  const activeSiteCodes = new Set(
+  siteRecords
+    .filter((site) => isOperationalProjectStatus(site.status))
+    .map((site) => site.code),
+);
   const allSiteCodes = new Set(siteRecords.map((site) => site.code));
   const itemCodes = new Set(items.map((item) => item.code));
   const validCostCodes = new Set(costCodeLevel3.map((entry) => entry.code));
