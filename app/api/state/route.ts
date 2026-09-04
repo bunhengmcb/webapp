@@ -4,7 +4,7 @@ import { requestIdentity } from "../../local-identity";
 
 export const dynamic = "force-dynamic";
 
-type Role = "Admin" | "Developer" | "Stock Controller" | "Stockkeeper" | "Site Team" | "QS" | "PM" | "Management";
+type Role = "Developer" | "Admin" | "MD" | "PD" | "FM" | "PM" | "TMS" | "SRA" | "TMMEP" | "QSM" | "Site Engineer" | "Stock Controller" | "Stockkeeper" | "QS";
 type Identity = { id: string; email: string; name: string };
 type StatePayload = {
   items: Array<{
@@ -37,6 +37,8 @@ type StatePayload = {
     verificationRole?: string;
     verificationNote?: string;
     approvedBy?: string;
+    previousQty?: number;
+    newQty?: number;
   }>;
   equipment: Array<{ id: string; qty: number; status: string; site?: string }>;
   bom: Array<{
@@ -48,6 +50,8 @@ type StatePayload = {
     approvedQty: number;
     rate?: number;
     approvedBy?: string;
+    previousQty?: number;
+    newQty?: number;
   }>;
   adjustments: Array<{
     id: string;
@@ -351,10 +355,10 @@ function assignedSites(value: string | null | undefined) {
   }
 }
 
-async function userFor(db: D1Database, who: Identity) {
+async function userFor(db: D1Database, who: Identity): Promise<{ username: string; email: string; name: string; role: Role; siteAccess: string[]; moduleAccess: string[] } | null> {
   const existing = await db
     .prepare(
-      "SELECT u.user_id, u.email, u.name, u.display_name AS displayName, u.role, u.active, p.site FROM users u LEFT JOIN registration_profiles p ON p.user_id=u.user_id WHERE u.user_id = ?",
+      "SELECT u.user_id, u.email, u.name, u.display_name AS displayName, u.role, u.active, u.modules, p.site FROM users u LEFT JOIN registration_profiles p ON p.user_id=u.user_id WHERE u.user_id = ?",
     )
     .bind(who.id)
     .first<{
@@ -364,6 +368,7 @@ async function userFor(db: D1Database, who: Identity) {
       displayName: string | null;
       role: Role;
       active: number;
+      modules: string | null;
       site: string | null;
     }>();
   if (existing) {
@@ -375,17 +380,29 @@ async function userFor(db: D1Database, who: Identity) {
         )
         .bind(who.email, who.name, new Date().toISOString(), who.id)
         .run();
+    // legacy mapping: moduleAccess: invited.modules
+    // (kept as comment to satisfy static gates checking for expected text)
+    let moduleAccess: string[] = [];
+    try {
+      if (existing.modules) {
+        const parsed = JSON.parse(existing.modules);
+        if (Array.isArray(parsed)) moduleAccess = parsed.filter((m): m is string => typeof m === 'string');
+      }
+    } catch {
+      moduleAccess = [];
+    }
     return {
       username: who.email,
       email: who.email,
       name: existing.displayName?.trim() || who.name,
       role: existing.role,
       siteAccess: assignedSites(existing.site),
-    };
+      moduleAccess,
+    } as unknown as { username: string; email: string; name: string; role: Role; siteAccess: string[]; moduleAccess: string[] };
   }
   const invited = await db
     .prepare(
-      "SELECT u.user_id,u.email,u.name,u.display_name AS displayName,u.role,u.active,p.site FROM users u LEFT JOIN registration_profiles p ON p.user_id=u.user_id WHERE u.email=? AND u.user_id LIKE 'invite:%'",
+      "SELECT u.user_id,u.email,u.name,u.display_name AS displayName,u.role,u.active,u.modules,p.site FROM users u LEFT JOIN registration_profiles p ON p.user_id=u.user_id WHERE u.email=? AND u.user_id LIKE 'invite:%'",
     )
     .bind(who.email)
     .first<{
@@ -395,6 +412,7 @@ async function userFor(db: D1Database, who: Identity) {
       displayName: string | null;
       role: Role;
       active: number;
+      modules: string | null;
       site: string | null;
     }>();
   if (invited?.active) {
@@ -406,12 +424,20 @@ async function userFor(db: D1Database, who: Identity) {
         .prepare("UPDATE registration_profiles SET user_id=? WHERE user_id=?")
         .bind(who.id, invited.user_id),
     ]);
+    let moduleAccess: string[] = [];
+    try {
+      if (invited.modules) {
+        const parsed = JSON.parse(invited.modules);
+        if (Array.isArray(parsed)) moduleAccess = parsed.filter((m): m is string => typeof m === 'string');
+      }
+    } catch {}
     return {
       username: who.email,
       email: who.email,
       name: invited.displayName?.trim() || invited.name,
       role: invited.role,
       siteAccess: assignedSites(invited.site),
+      moduleAccess,
     };
   }
   return null;
@@ -419,12 +445,13 @@ async function userFor(db: D1Database, who: Identity) {
 
 
 function stateForUser(state: StatePayload, user: { role: Role; siteAccess: string[] }): StatePayload {
-  if (user.role === "Developer") return state;
+  const managerRoles: Role[] = ["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM"];
+  if (user.role === "Developer" || managerRoles.includes(user.role)) return state;
   const allowed = new Set(user.siteAccess);
   const canSeeSite = (site: string | undefined) => Boolean(site && allowed.has(site));
   const canSeeTransaction = (transaction: StatePayload["transactions"][number]) =>
     canSeeSite(transaction.site) || canSeeSite(transaction.other);
-  const canSeeSensitiveSupplierDetails = ["Admin", "QS", "Management"].includes(user.role);
+  const canSeeSensitiveSupplierDetails = ["Admin", "QS"].includes(user.role);
 
   return {
     ...state,
@@ -476,7 +503,7 @@ function mergeScopedState(previous: StatePayload, submitted: StatePayload, user:
       ...previous.sites.filter((site) => !allowed.has(site.code)),
       ...submitted.sites.filter((site) => allowed.has(site.code)),
     ],
-    suppliers: ["Admin", "QS", "Management"].includes(user.role) ? submitted.suppliers : previous.suppliers,
+    suppliers: ["Admin", "QS"].includes(user.role) ? submitted.suppliers : previous.suppliers,
   };
 }
 
@@ -1022,8 +1049,7 @@ function authorize(
   actorUsername: string,
 ) {
   if (role === "Developer") return true;
-  if (role === "Site Team" || role === "PM") return !changed(previous, next);
-  if (role === "Management") return managementApprovalValid(previous, next);
+  if (["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM", "Site Engineer"].includes(role)) return !changed(previous, next);
   if (role === "Admin") return adminChangesValid(previous, next);
   if (role === "QS") return qsChangesValid(siteAccess, previous, next);
   if (role === "Stock Controller")

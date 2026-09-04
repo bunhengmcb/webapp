@@ -14,9 +14,9 @@ export async function GET() {
   )
     .bind(identity.id)
     .first<{ role: string; active: number }>();
-  if (!user?.active || !["Admin", "Developer", "Management"].includes(user.role))
+  if (!user?.active || !["Developer", "Admin", "MD", "PD", "FM", "PM", "QSM"].includes(user.role))
     return Response.json(
-      { error: "Developer, Management or Administrator permission required" },
+      { error: "Audit permission required" },
       { status: 403 },
     );
   const logs = await env.DB.prepare(

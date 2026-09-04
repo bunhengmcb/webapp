@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 
-type Role = "Admin" | "Developer" | "Stock Controller" | "Stockkeeper" | "Site Team" | "QS" | "PM" | "Management";
+type Role = "Developer" | "Admin" | "MD" | "PD" | "FM" | "PM" | "TMS" | "SRA" | "TMMEP" | "QSM" | "Site Engineer" | "Stock Controller" | "Stockkeeper" | "QS";
 type View =
   | "Dashboard"
   | "Item Master"
@@ -154,7 +154,7 @@ type StockCountSession = {
   createdAt: string;
   createdBy: string;
   status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Approved" | "Rejected";
-  countType?: "Monthly Full Count" | "Cycle Count";
+  countType?: "MONTHLY_FULL" | "CYCLE";
   lines: Array<{ code: string; systemQty: number; physicalQty: number | null; recountQty?: number | null }>;
   submittedAt?: string;
   decidedAt?: string;
@@ -516,7 +516,7 @@ const fullSystemViews: View[] = [
     "Item Master",
     "BOM Control",
     "Current Stock",
-    "Stock Count",
+    "Physical Count",
     "Stock In",
     "Stock Out",
     "Site Transfer",
@@ -534,85 +534,21 @@ const fullSystemViews: View[] = [
 const roleViews: Record<Role, View[]> = {
   Developer: fullSystemViews,
   Admin: [
-    "Dashboard",
-    "Item Master",
-    "Current Stock",
-    "Physical Count",
-    "Transactions",
-    "Audit Report",
-    "Reports",
-    "Backup & Recovery",
-    "Alerts",
-    "Supplier",
-    "Project/Site",
-    "Help & SOP",
+    "Dashboard", "Item Master", "Current Stock", "Physical Count", "Transactions",
+    "Audit Report", "Reports", "Alerts", "Supplier", "Project/Site", "User Access", "Help & SOP",
   ],
-  "Stock Controller": [
-    "Dashboard",
-    "BOM Control",
-    "Current Stock",
-    "Physical Count",
-    "Stock In",
-    "Stock Out",
-    "Site Transfer",
-    "Equipment",
-    "Transactions",
-    "Reports",
-    "Alerts",
-    "Supplier",
-    "Help & SOP",
-  ],
-  Stockkeeper: [
-    "Dashboard",
-    "Current Stock",
-    "Physical Count",
-    "Stock In",
-    "Site Transfer",
-    "Equipment",
-    "Transactions",
-    "Alerts",
-    "Help & SOP",
-  ],
-  "Site Team": [
-    "Dashboard",
-    "Current Stock",
-    "Transactions",
-    "Alerts",
-    "Help & SOP",
-  ],
-  QS: [
-    "Dashboard",
-    "BOM Control",
-    "Current Stock",
-    "Transactions",
-    "Reports",
-    "Alerts",
-    "Help & SOP",
-  ],
-  PM: [
-    "Dashboard",
-    "BOM Control",
-    "Current Stock",
-    "Physical Count",
-    "Transactions",
-    "Reports",
-    "Alerts",
-    "Help & SOP",
-  ],
-  Management: [
-    "Dashboard",
-    "BOM Control",
-    "Current Stock",
-    "Physical Count",
-    "Transactions",
-    "Audit Report",
-    "Reports",
-    "Backup & Recovery",
-    "Alerts",
-    "Supplier",
-    "Project/Site",
-    "Help & SOP",
-  ],
+  MD: ["Dashboard", "BOM Control", "Current Stock", "Physical Count", "Equipment", "Transactions", "Audit Report", "Reports", "Alerts", "Supplier", "Project/Site", "Help & SOP"],
+  PD: ["Dashboard", "BOM Control", "Current Stock", "Physical Count", "Site Transfer", "Equipment", "Transactions", "Audit Report", "Reports", "Alerts", "Supplier", "Project/Site", "Help & SOP"],
+  FM: ["Dashboard", "BOM Control", "Current Stock", "Physical Count", "Equipment", "Transactions", "Audit Report", "Reports", "Alerts", "Supplier", "Project/Site", "Help & SOP"],
+  PM: ["Dashboard", "BOM Control", "Current Stock", "Physical Count", "Site Transfer", "Equipment", "Transactions", "Reports", "Alerts", "Project/Site", "Help & SOP"],
+  TMS: ["Dashboard", "BOM Control", "Current Stock", "Transactions", "Reports", "Alerts", "Help & SOP"],
+  SRA: ["Dashboard", "BOM Control", "Current Stock", "Transactions", "Reports", "Alerts", "Help & SOP"],
+  TMMEP: ["Dashboard", "BOM Control", "Current Stock", "Transactions", "Reports", "Alerts", "Help & SOP"],
+  QSM: ["Dashboard", "BOM Control", "Current Stock", "Transactions", "Audit Report", "Reports", "Alerts", "Supplier", "Project/Site", "Help & SOP"],
+  "Site Engineer": ["Dashboard", "Current Stock", "Transactions", "Alerts", "Help & SOP"],
+  "Stock Controller": ["Dashboard", "BOM Control", "Current Stock", "Physical Count", "Stock In", "Stock Out", "Site Transfer", "Equipment", "Transactions", "Reports", "Alerts", "Supplier", "Help & SOP"],
+  Stockkeeper: ["Dashboard", "Current Stock", "Physical Count", "Stock In", "Stock Out", "Site Transfer", "Equipment", "Transactions", "Alerts", "Help & SOP"],
+  QS: ["Dashboard", "BOM Control", "Current Stock", "Transactions", "Reports", "Alerts", "Help & SOP"],
 };
 const operationViews: View[] = [
   "Stock In",
@@ -957,7 +893,7 @@ export default function Home() {
   const [pendingUserCount, setPendingUserCount] = useState(0);
   useEffect(() => {
     if (!user) return;
-    const globalAccess = user.role === "Developer";
+    const globalAccess = ["Developer", "MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM"].includes(user.role);
     const assigned = globalAccess
       ? sites
       : (user.siteAccess ?? []).filter((site) => sites.includes(site));
@@ -1210,10 +1146,9 @@ export default function Home() {
         <section className="registration-card pending-card">
           <div className="registration-mark">MCB</div>
           <span className="eyebrow">REGISTRATION RECEIVED</span>
-          <h1>Waiting for Developer approval</h1>
+          <h1>Waiting for account approval</h1>
           <p>
-            Your identity is verified and your registration has been saved. The
-            Developer must activate your role before you can enter the
+            Your identity is verified and your registration has been saved. An Admin or Developer must activate your role before you can enter the
             inventory system.
           </p>
           <div className="registration-identity">
@@ -1235,21 +1170,21 @@ export default function Home() {
       <AuthGateway serviceError={syncStatus === "error" && !authRequired} />
     );
   const allowed = roleViews[user.role];
-  const hasGlobalSiteAccess = user.role === "Developer";
+  const hasGlobalSiteAccess = ["Developer", "MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM"].includes(user.role);
   const selectableSites = hasGlobalSiteAccess
     ? sites
     : (user.siteAccess ?? []).filter((site) => sites.includes(site));
   const allSitesValue = hasGlobalSiteAccess ? "ALL SITES" : "ALL ASSIGNED SITES";
-  const visibleTransactions = user.role === "Developer"
+  const visibleTransactions = hasGlobalSiteAccess
     ? transactions
     : transactions.filter((transaction) =>
         selectableSites.includes(transaction.site) ||
         Boolean(transaction.other && selectableSites.includes(transaction.other)),
       );
-  const visibleEquipment = user.role === "Developer"
+  const visibleEquipment = hasGlobalSiteAccess
     ? equipment
     : equipment.filter((record) => selectableSites.includes(record.site));
-  const visibleAdjustments = user.role === "Developer"
+  const visibleAdjustments = hasGlobalSiteAccess
     ? adjustments
     : adjustments.filter((record) => selectableSites.includes(record.site));
   const visibleStockCounts = user.role === "Developer"
@@ -1287,13 +1222,19 @@ export default function Home() {
     allowedOperations = operationViews.filter((v) => allowed.includes(v)),
     mobileViews: Record<Role, View[]> = {
       Developer: ["Dashboard", "Current Stock", "User Access", "Alerts", "Help & SOP"],
-      Admin: ["Dashboard", "Current Stock", "Physical Count", "Alerts", "Help & SOP"],
-      "Stock Controller": ["Dashboard", "Stock In", "Stock Out", "Site Transfer", "Alerts"],
-      Stockkeeper: ["Dashboard", "Stock In", "Site Transfer", "Equipment", "Alerts"],
-      "Site Team": ["Dashboard", "Current Stock", "Alerts", "Help & SOP"],
-      QS: ["Dashboard", "BOM Control", "Current Stock", "Reports", "Alerts"],
+      Admin: ["Dashboard", "Current Stock", "Physical Count", "User Access", "Alerts"],
+      MD: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
+      PD: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
+      FM: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
       PM: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
-      Management: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
+      TMS: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
+      SRA: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
+      TMMEP: ["Dashboard", "Current Stock", "Reports", "Alerts", "Help & SOP"],
+      QSM: ["Dashboard", "BOM Control", "Current Stock", "Reports", "Alerts"],
+      "Site Engineer": ["Dashboard", "Current Stock", "Alerts", "Help & SOP"],
+      "Stock Controller": ["Dashboard", "Stock In", "Stock Out", "Site Transfer", "Alerts"],
+      Stockkeeper: ["Dashboard", "Stock In", "Stock Out", "Site Transfer", "Equipment"],
+      QS: ["Dashboard", "BOM Control", "Current Stock", "Reports", "Alerts"],
     };
   return (
     <div
@@ -1645,7 +1586,7 @@ export default function Home() {
               adjustments={visibleAdjustments}
               stockCounts={visibleStockCounts}
               pendingUserCount={pendingUserCount}
-              canManageUsers={user.role === "Developer"}
+              canManageUsers={["Developer", "Admin"].includes(user.role)}
               onNavigate={setView}
             />
           )}
@@ -1670,6 +1611,7 @@ export default function Home() {
           {view === "User Access" && (
             <UserAccess
               currentUser={user.username}
+              currentRole={user.role}
               availableSites={siteRecords.filter(
                 (site) => site.status === "Active",
               )}
@@ -2033,7 +1975,7 @@ function RegistrationForm({
           <span className="eyebrow">REGISTRATION SUBMITTED</span>
           <h1>Approval request sent</h1>
           <p>
-            The Developer can now review and activate your account from
+            An Admin or Developer can now review and activate your account from
             User Access.
           </p>
           <button className="primary" onClick={onComplete}>
@@ -2076,7 +2018,7 @@ function RegistrationForm({
           <p>
             {firstAccount
               ? "The first registered account receives Developer access."
-              : "The Developer will review your requested role."}
+              : "An Admin or Developer will review and assign your operational role."}
           </p>
         </div>
         <label>
@@ -2117,11 +2059,10 @@ function RegistrationForm({
               disabled={firstAccount}
             >
               {firstAccount && <option>Developer</option>}
-              {!firstAccount && <option>Admin</option>}
               {!firstAccount && <option>Stock Controller</option>}
               {!firstAccount && <option>Stockkeeper</option>}
+              {!firstAccount && <option>Site Engineer</option>}
               {!firstAccount && <option>QS</option>}
-              {!firstAccount && <option>Management</option>}
             </select>
           </label>
         </div>
@@ -2200,16 +2141,14 @@ function Dashboard({
     <>
       <section className="dashboard-intro">
         <div>
-          <span className="eyebrow">{viewerRole === "PM" ? "PROJECT CONTROL" : viewerRole === "Management" ? "MANAGEMENT CONTROL" : viewerRole === "Site Team" ? "SITE VISIBILITY" : "CONTROL CENTER"}</span>
-          <h2>{viewerRole === "PM" ? "Project inventory overview" : viewerRole === "Management" ? "Portfolio inventory overview" : viewerRole === "Site Team" ? "Site material overview" : "Inventory control center"}</h2>
+          <span className="eyebrow">{["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM"].includes(viewerRole) ? "MANAGEMENT CONTROL" : viewerRole === "Site Engineer" ? "SITE VISIBILITY" : "CONTROL CENTER"}</span>
+          <h2>{["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM"].includes(viewerRole) ? "Portfolio inventory overview" : viewerRole === "Site Engineer" ? "Site material overview" : "Inventory control center"}</h2>
           <p>
-            {viewerRole === "PM"
-              ? "Monitor assigned-site stock, BOM exposure and exceptions without changing inventory records."
-              : viewerRole === "Management"
-                ? "Review stock health and operational exceptions across the sites you are authorized to see."
-                : viewerRole === "Site Team"
-                  ? "Check material availability and recent movements for your assigned site without posting stock."
-                  : "Monitor material availability and site operations from one controlled workspace."}
+            {["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM"].includes(viewerRole)
+              ? "Review stock health and operational exceptions across all sites with role-appropriate authority."
+              : viewerRole === "Site Engineer"
+                ? "Check material availability and recent movements for your assigned site without posting stock."
+                : "Monitor material availability and site operations from one controlled workspace."}
           </p>
         </div>
         <div className="quick-actions">
@@ -4007,7 +3946,7 @@ function CurrentStock({
                     <td>{request.requestedBy}</td>
                     <td>
                       {request.status === "Pending" &&
-                      ["Admin", "Developer", "Management"].includes(role) ? (
+                      ["Admin", "Developer"].includes(role) ? (
                         <div className="approval-actions">
                           <input
                             value={decisionNotes[request.id] || ""}
@@ -5651,14 +5590,19 @@ function DailyStockOutBatch({
       }
       const normalizedCostCode = row.costCode.trim().toUpperCase();
       const line = bom.find((entry) => entry.site === site && entry.code === row.code && entry.costCode === normalizedCostCode);
+      // Stockkeeper may prepare a sheet but may NOT assign a QS Cost Code.
+      // Cost Code is required for final posting (Stock Controller / Developer).
       if (!normalizedCostCode || !line) {
-        setError(`Row ${lineNo}: select an approved QS Cost Code linked to this item and site`);
-        return false;
+        if (canPost) {
+          setError(`Row ${lineNo}: select an approved QS Cost Code linked to this item and site`);
+          return false;
+        }
       }
-
       stockDemand.set(row.code, (stockDemand.get(row.code) ?? 0) + qty);
-      const bomKey = `${row.code}::${normalizedCostCode}`;
-      bomDemand.set(bomKey, (bomDemand.get(bomKey) ?? 0) + qty);
+      if (normalizedCostCode && line) {
+        const bomKey = `${row.code}::${normalizedCostCode}`;
+        bomDemand.set(bomKey, (bomDemand.get(bomKey) ?? 0) + qty);
+      }
     }
 
     for (const [code, demand] of stockDemand) {
@@ -5704,35 +5648,86 @@ function DailyStockOutBatch({
     return true;
   }
 
-  function postBatch() {
+  function submitForVerification() {
     if (!validateBatch(true)) return;
     const now = new Date().toISOString();
-    const batchId = `SO-${transactionDate.replaceAll("-", "")}-${uid().slice(0, 6).toUpperCase()}`;
-    const postedRows = activeRows.map((row) => ({ ...row, costCode: row.costCode.trim().toUpperCase(), qtyNumber: Number(row.qty) }));
-    const stockDelta = new Map<string, number>();
-    postedRows.forEach((row) => stockDelta.set(row.code, (stockDelta.get(row.code) ?? 0) + row.qtyNumber));
-    setStock((current) => {
-      const siteStock = { ...(current[site] ?? {}) };
-      for (const [code, qty] of stockDelta) siteStock[code] = (siteStock[code] ?? 0) - qty;
-      return { ...current, [site]: siteStock };
-    });
-    const newTransactions: Tx[] = postedRows.map((row, index) => ({
-      id: uid(), date: transactionDate, timestamp: now, type: "STOCK OUT", site, other: "", code: row.code,
-      qty: -row.qtyNumber, by: user, status: "Posted", costCode: row.costCode,
-      reference: `${sheetRef.trim()} · ${batchId} · Line ${index + 1}`,
-      person: row.issuedTo.trim(), reason: row.remark.trim() || undefined,
-    }));
-    setTransactions((current) => [...newTransactions, ...current]);
-    localStorage.removeItem(draftKey);
-    setRows([blankDailyStockOutRow(), blankDailyStockOutRow(), blankDailyStockOutRow()]);
-    setSheetRef("");
-    setValidated(false);
-    setError("");
-    flash(`${batchId} posted successfully. ${newTransactions.length} Stock Out lines recorded atomically in this batch.`);
+    (async () => {
+      try {
+        const response = await fetch('/api/stock-out', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site, rows: activeRows.map(r => ({ code: r.code, qty: Number(r.qty), costCode: r.costCode, issuedTo: r.issuedTo, remark: r.remark })), sheetRef, transactionDate }),
+        });
+        const data = await readJson<{ ok?: boolean; requestId?: string; status?: string; error?: string }>(response);
+        if (!response.ok) throw new Error(data.error || 'Unable to submit for verification');
+        localStorage.removeItem(draftKey);
+        setRows([blankDailyStockOutRow(), blankDailyStockOutRow(), blankDailyStockOutRow()]);
+        setSheetRef("");
+        setValidated(false);
+        setError("");
+        flash(`${data.requestId} submitted for verification.`);
+        // Refresh full state from server to show pending request state
+        const res2 = await fetch('/api/state', { cache: 'no-store' });
+        if (res2.ok) {
+          const payload = await readJson<unknown>(res2);
+            if (payload && typeof payload === 'object' && payload !== null && 'state' in payload) {
+              const p = payload as { state?: InventoryState };
+              if (p.state) {
+                setStock(p.state.stock);
+                setTransactions(p.state.transactions);
+              }
+            }
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Submission failed');
+      }
+    })();
+  }
+
+  function postBatch() {
+    if (!canPost) {
+      setError("Only Stock Controller or Developer may post this batch");
+      return;
+    }
+    if (!validateBatch(true)) return;
+    (async () => {
+      try {
+        const response = await fetch('/api/stock-out', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ site, rows: activeRows.map(r => ({ code: r.code, qty: Number(r.qty), costCode: r.costCode, issuedTo: r.issuedTo, remark: r.remark })), sheetRef, transactionDate }),
+        });
+        const data = await readJson<{ ok?: boolean; requestId?: string; status?: string; posted?: boolean; txCount?: number; error?: string }>(response);
+        if (!response.ok) throw new Error(data.error || 'Unable to post batch');
+        localStorage.removeItem(draftKey);
+        setRows([blankDailyStockOutRow(), blankDailyStockOutRow(), blankDailyStockOutRow()]);
+        setSheetRef("");
+        setValidated(false);
+        setError("");
+        flash(`${data.requestId} posted successfully. ${data.txCount ?? 0} lines recorded.`);
+        // Refresh state from server
+        const res2 = await fetch('/api/state', { cache: 'no-store' });
+        if (res2.ok) {
+          const payload = await readJson<unknown>(res2);
+          if (payload && typeof payload === 'object' && payload !== null && 'state' in payload) {
+            const p = payload as { state?: InventoryState };
+            if (p.state) {
+              setStock(p.state.stock);
+              setTransactions(p.state.transactions);
+            }
+          }
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Post failed');
+      }
+    })();
   }
 
   if (!accessibleSites.length) return <Empty title="No assigned site" text="Ask the Developer to assign a site before recording Stock Out." />;
-  if (!["Developer", "Stock Controller"].includes(role)) return <Empty title="Stock Out restricted" text="Daily Stock Out entry is assigned to the Stock Controller by default." />;
+  // Allow Stockkeepers to prepare daily stock out sheets, but only Stock Controller/Developer may post.
+  const canPrepare = ["Developer", "Stockkeeper"].includes(role);
+  const canPost = ["Developer", "Stock Controller"].includes(role);
+  if (!canPrepare) return <Empty title="Stock Out restricted" text="Stock Out preparation is assigned to the Stockkeeper; the Stock Controller verifies and posts." />;
 
   return (
     <div className="module-stack">
@@ -5750,19 +5745,18 @@ function DailyStockOutBatch({
       </article>
 
       <article className="panel">
-        <div className="panel-head"><div><span className="eyebrow">ISSUE LINES</span><h3>Paper sheet review grid</h3></div><button type="button" onClick={() => setRows((current) => [...current, blankDailyStockOutRow()])}>+ Add row</button></div>
-        <div className="table-wrap">
+        <div className="panel-head"><div><span className="eyebrow">ISSUE LINES</span><h3>Stock Out</h3></div><button type="button" onClick={() => setRows((current) => [...current, blankDailyStockOutRow()])}>+ Add row</button></div>
+        <div className="table-wrap compact">
           <table>
-            <thead><tr><th>#</th><th>Item</th><th>QS Cost Code</th><th>Qty Out</th><th>UOM</th><th>Issued To</th><th>Remark</th><th /></tr></thead>
+            <thead><tr><th>#</th><th>Item</th><th>{canPost ? 'QS Cost Code' : 'UOM'}</th><th>Qty Out</th><th>Issued To</th><th>Remark</th><th /></tr></thead>
             <tbody>{rows.map((row, index) => {
               const item = items.find((entry) => entry.code === row.code);
               const codes = Array.from(new Set(bom.filter((entry) => entry.site === site && entry.code === row.code).map((entry) => entry.costCode)));
               return <tr key={row.id}>
                 <td>{index + 1}</td>
                 <td><select value={row.code} onChange={(e) => updateRow(row.id, { code: e.target.value, costCode: "" })}><option value="">Select item</option>{availableItemOptions.map((entry) => <option key={entry.code} value={entry.code}>{entry.code} · {entry.name}</option>)}</select></td>
-                <td><select value={row.costCode} onChange={(e) => updateRow(row.id, { costCode: e.target.value })} disabled={!row.code}><option value="">Select cost code</option>{codes.map((entry) => <option key={entry}>{entry}</option>)}</select></td>
+                <td>{canPost ? <select value={row.costCode} onChange={(e) => updateRow(row.id, { costCode: e.target.value })} disabled={!row.code}><option value="">Select cost code</option>{codes.map((entry) => <option key={entry}>{entry}</option>)}</select> : <span>{item?.unit ?? '—'}</span>}</td>
                 <td><input inputMode="decimal" value={row.qty} onChange={(e) => updateRow(row.id, { qty: e.target.value })} placeholder="0" /></td>
-                <td>{item?.unit ?? "—"}</td>
                 <td><input value={row.issuedTo} onChange={(e) => updateRow(row.id, { issuedTo: e.target.value })} placeholder="Worker / team" /></td>
                 <td><input value={row.remark} onChange={(e) => updateRow(row.id, { remark: e.target.value })} placeholder="Work / remark" /></td>
                 <td><button type="button" className="table-action" onClick={() => setRows((current) => current.length <= 1 ? [blankDailyStockOutRow()] : current.filter((entry) => entry.id !== row.id))}>Remove</button></td>
@@ -5771,10 +5765,17 @@ function DailyStockOutBatch({
           </table>
         </div>
         {error && <div className="form-error">{error}</div>}
-        <div className="form-actions">
-          <button type="button" className="secondary" onClick={() => validateBatch(false)}>Validate Batch</button>
-          <button type="button" onClick={postBatch}>{validated ? "Post Validated Batch" : "Validate & Post Batch"}</button>
+        <div className="form-actions compact">
+          <button type="button" className="secondary" onClick={() => { localStorage.setItem(draftKey, JSON.stringify({ site, transactionDate, sheetRef, rows, savedAt: new Date().toISOString() })); flash('Draft saved'); }}>Save Draft</button>
+          <button type="button" className="secondary" onClick={() => validateBatch(false)}>Validate</button>
+          <button type="button" className="secondary" onClick={submitForVerification} disabled={!canPrepare}>{"Submit for Verification"}</button>
+          <button type="button" onClick={postBatch} disabled={!canPost} title={!canPost ? "Only Stock Controller or Developer may post this batch" : undefined}>{validated ? "Post Validated Batch" : "Validate & Post Batch"}</button>
+          {!canPost && <div className="help">You may prepare and validate a sheet. Only a Stock Controller or Developer may post; save your draft and notify them to review and post.</div>}
         </div>
+      </article>
+      <article className="panel">
+        <div className="panel-head"><div><span className="eyebrow">PENDING VERIFICATION</span><h3>Stock Out Requests</h3><small>Submitted requests waiting for checker action</small></div></div>
+        <PendingVerificationPanel user={user} role={role} />
       </article>
     </div>
   );
@@ -6214,6 +6215,135 @@ function TransferForm({
         </div>
       )}
     </>
+  );
+}
+
+function PendingVerificationPanel({ user, role }: { user: string; role: Role }) {
+  type StockOutListRow = { id: string; site: string; created_at: string; created_by: string; created_by_email: string; status: string; submitted_at?: string; verified_at?: string; verified_by?: string; posted_at?: string; posted_by?: string; reference?: string; payload: string };
+  const [requests, setRequests] = useState<StockOutListRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [selected, setSelected] = useState<StockOutListRow | null>(null);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/stock-out', { cache: 'no-store' });
+      const data = await readJson<{ requests?: StockOutListRow[]; error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || 'Unable to load requests');
+      setRequests((data.requests || []).filter((r) => (role === 'Developer' || role === 'Stock Controller') ? true : r.created_by_email === user));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Load failed');
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { queueMicrotask(() => void load()); const t = setInterval(load, 30000); return () => clearInterval(t); }, []);
+
+  if (loading) return <Empty text="Loading requests…" />;
+  if (error) return <div className="form-error">{error}</div>;
+  if (!requests.length) return <Empty text="No pending requests" />;
+
+  return (
+    <div>
+      <div className="table-wrap">
+        <table>
+          <thead><tr><th>ID</th><th>Site</th><th>Date</th><th>Reference</th><th>Maker</th><th>Status</th><th /></tr></thead>
+          <tbody>
+            {requests.map((r) => (
+              <tr key={r.id}>
+                <td>{r.id}</td>
+                <td>{r.site}</td>
+                <td>{new Date(r.created_at).toLocaleString()}</td>
+                <td>{r.reference}</td>
+                <td>{r.created_by_email}</td>
+                <td>{r.status}</td>
+                <td><button type="button" className="table-action" onClick={() => setSelected(r)}>Review</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {selected && <RequestReviewModal request={selected} onClose={() => { setSelected(null); load(); }} role={role} />}
+    </div>
+  );
+}
+
+function RequestReviewModal({ request, onClose, role }: { request: { id: string; payload: string; reference?: string; status: string }; onClose: () => void; role: Role }) {
+  type ReviewRow = { code: string; qty: number | string; costCode?: string; issuedTo?: string; remark?: string };
+  const [rows, setRows] = useState<ReviewRow[]>(() => {
+    try {
+      const parsed = JSON.parse(request.payload) as { rows?: ReviewRow[] };
+      return parsed.rows || [];
+    } catch {
+      return [];
+    }
+  });
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function verify() {
+    setBusy(true); setError('');
+    try {
+      const res = await fetch(`/api/stock-out?id=${encodeURIComponent(request.id)}&action=verify`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rows, sheetRef: request.reference, transactionDate: JSON.parse(request.payload).transactionDate }) });
+      const data = await readJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || 'Verify failed');
+      onClose();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Verify failed'); }
+    setBusy(false);
+  }
+
+  async function post() {
+    setBusy(true); setError('');
+    try {
+      const res = await fetch(`/api/stock-out?id=${encodeURIComponent(request.id)}&action=post`, { method: 'PUT' });
+      const data = await readJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || 'Post failed');
+      onClose();
+    } catch (e) { setError(e instanceof Error ? e.message : 'Post failed'); }
+    setBusy(false);
+  }
+
+  async function rejectOrReturn(kind: 'return' | 'reject') {
+    setBusy(true); setError('');
+    try {
+      const res = await fetch(`/api/stock-out?id=${encodeURIComponent(request.id)}&action=${kind}`, { method: 'PUT' });
+      const data = await readJson<{ error?: string }>(res);
+      if (!res.ok) throw new Error(data.error || `${kind} failed`);
+      onClose();
+    } catch (e) { setError(e instanceof Error ? e.message : `${kind} failed`); }
+    setBusy(false);
+  }
+
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true">
+      <div className="budget-modal">
+        <h3>Review {request.id}</h3>
+        <div className="table-wrap">
+          <table>
+            <thead><tr><th>Item</th><th>Qty</th><th>UOM</th><th>Available</th><th>QS Cost Code</th><th>Remark</th></tr></thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr key={i}>
+                  <td>{r.code}</td>
+                  <td>{r.qty}</td>
+                  <td>{/* UOM */}</td>
+                  <td>{/* Available (server-side check on post) */}</td>
+                  <td><input value={r.costCode||''} onChange={(e) => setRows(rows.map((x,idx)=>idx===i?{...x,costCode:e.target.value}:x))} /></td>
+                  <td>{r.remark||''}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {error && <div className="form-error">{error}</div>}
+        <div className="modal-actions">
+          <button type="button" className="secondary" onClick={onClose}>Close</button>
+          {role !== 'Stockkeeper' && <button className="secondary" onClick={() => rejectOrReturn('return')} disabled={busy}>Return for correction</button>}
+          {role !== 'Stockkeeper' && <button className="secondary" onClick={() => rejectOrReturn('reject')} disabled={busy}>Reject</button>}
+          {role !== 'Stockkeeper' && <button className="confirm" onClick={verify} disabled={busy}>Verify</button>}
+          {role !== 'Stockkeeper' && request.status === 'Verified' && <button className="confirm" onClick={post} disabled={busy}>Post</button>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -7690,7 +7820,7 @@ function Transactions({ rows, setRows, stock, setStock, user, role, canCorrect, 
           <form onSubmit={submitVerification} className="modal-form">
             <label>Verifier<input value={`${user} · ${role}`} readOnly /></label>
             <label>Verification note<textarea required value={verificationNote} onChange={(event) => setVerificationNote(event.target.value)} placeholder="State what you checked and the supporting document reference" /></label>
-            {mayVerify(verificationTarget) ? <><label className="verification-declaration"><input type="checkbox" checked={verificationConfirmed} onChange={(event) => setVerificationConfirmed(event.target.checked)} /><span>I checked the source document, item, quantity, site, balance and reference. I confirm this transaction is correct.{role === "Developer" && sameActor(verificationTarget.by, user) ? " Developer override is recorded because you posted this transaction." : ""}</span></label><div className="modal-warning">This sign-off records your logged-in identity and timestamp. It does not change stock.</div></> : <div className="modal-warning danger">You posted this transaction, so you cannot independently verify it. Ask another Admin, Management or Developer user to sign it.</div>}
+            {mayVerify(verificationTarget) ? <><label className="verification-declaration"><input type="checkbox" checked={verificationConfirmed} onChange={(event) => setVerificationConfirmed(event.target.checked)} /><span>I checked the source document, item, quantity, site, balance and reference. I confirm this transaction is correct.{role === "Developer" && sameActor(verificationTarget.by, user) ? " Developer override is recorded because you posted this transaction." : ""}</span></label><div className="modal-warning">This sign-off records your logged-in identity and timestamp. It does not change stock.</div></> : <div className="modal-warning danger">You posted this transaction, so you cannot independently verify it. Ask another authorized Stock Controller or the Developer to sign it.</div>}
             <div className="modal-actions"><button type="button" className="secondary" onClick={() => setVerificationTarget(null)}>Cancel</button><button type="submit" className="confirm" disabled={!mayVerify(verificationTarget) || !verificationConfirmed || !verificationNote.trim()}>Sign and verify</button></div>
           </form>
         </section>
@@ -8586,60 +8716,48 @@ function HelpAndSop({ role, allowed, onNavigate }: { role: Role; allowed: View[]
     displayedRole = role === "Developer" ? guideRole : role,
     displayedAccess = roleViews[displayedRole];
   const guides: Record<Role, Array<{ title: string; text: string; view: View }>> = {
-    Admin: [
-      { title: "Review approvals", text: "Open Alerts and decide pending adjustments, stock counts and user registrations.", view: "Alerts" },
-      { title: "Maintain master data", text: "Control items, sites, suppliers, roles and Cost Code links before operations begin.", view: "Item Master" },
-      { title: "Correct posted records", text: "Use linked reversal and correction entries. Never remove a posted transaction.", view: "Transactions" },
-      { title: "Protect company data", text: "Export a complete backup and review automatic revision history regularly.", view: "Backup & Recovery" },
-    ],
     Developer: [
-      { title: "Full system access", text: "Inspect and operate every module while preserving permanent transaction and audit controls.", view: "Dashboard" },
-      { title: "Manage users and roles", text: "Create users, assign any role and control access across one or multiple sites.", view: "User Access" },
-      { title: "Diagnose operations", text: "Use the complete audit report, notifications and management reports to trace data issues.", view: "Audit Report" },
-      { title: "Protect and recover", text: "Export complete backups, restore validated data and review automatic version history.", view: "Backup & Recovery" },
+      { title: "Full system access", text: "Operate every module while preserving workflow, audit and recovery controls.", view: "Dashboard" },
+      { title: "Manage authority", text: "Create users, assign exact organizational roles and control site access.", view: "User Access" },
+      { title: "Security and recovery", text: "Review audit records and use protected backup/recovery tools.", view: "Backup & Recovery" },
+    ],
+    Admin: [
+      { title: "Manage normal accounts", text: "Activate, suspend and assign normal roles/sites. Developer access is protected.", view: "User Access" },
+      { title: "Final inventory controls", text: "Post approved counts and adjustments according to maker/checker rules.", view: "Physical Count" },
+      { title: "Review business audit", text: "Trace controlled inventory and user-access changes.", view: "Audit Report" },
+    ],
+    MD: [{ title: "Executive oversight", text: "Review company-wide inventory, cost, equipment and critical exceptions.", view: "Dashboard" }],
+    PD: [{ title: "Project authority", text: "Review all-site project performance and final BOM decisions.", view: "BOM Control" }],
+    FM: [{ title: "Financial control", text: "Review inventory value, consumption, supplier and lifecycle financial exposure.", view: "Reports" }],
+    PM: [{ title: "Operational oversight", text: "Monitor all-site operations, close-out, transfers and equipment exceptions.", view: "Dashboard" }],
+    TMS: [{ title: "Structural oversight", text: "Review structural material availability and technical exceptions.", view: "Current Stock" }],
+    SRA: [{ title: "Architectural oversight", text: "Review architectural materials and specification-related exceptions.", view: "Current Stock" }],
+    TMMEP: [{ title: "MEP oversight", text: "Review MEP materials and specification-related exceptions.", view: "Current Stock" }],
+    QSM: [{ title: "BOM control", text: "Review BOM, cost-code quality and pending cost allocation across all sites.", view: "BOM Control" }],
+    "Site Engineer": [
+      { title: "Review site stock", text: "Check assigned-site material availability without posting inventory.", view: "Current Stock" },
+      { title: "Trace site movement", text: "Review relevant site transactions and references.", view: "Transactions" },
     ],
     "Stock Controller": [
-      { title: "Verify deliveries", text: "Review pending Stock In evidence and post only accepted quantities within approved BOM.", view: "Stock In" },
-      { title: "Post daily issues", text: "Enter and validate each Daily Stock Out batch against Available Stock and approved BOM.", view: "Stock Out" },
-      { title: "Control transfers", text: "Review reservations, dispatch, receipts and quantity mismatches for assigned sites.", view: "Site Transfer" },
-      { title: "Review counts", text: "Manage recounts and approve final physical-count variances with a complete audit trail.", view: "Stock Count" },
+      { title: "Verify Stock In", text: "Review warehouse submissions and post controlled receipts.", view: "Stock In" },
+      { title: "Verify Stock Out", text: "Assign existing Cost Codes, validate stock/BOM and post issues.", view: "Stock Out" },
+      { title: "Control transfers and counts", text: "Reserve transfers and review physical-count variances.", view: "Physical Count" },
     ],
     Stockkeeper: [
-      { title: "Receive material", text: "Verify delivery reference, supplier, site, item, quantity and QS Cost Code before Stock In.", view: "Stock In" },
-      { title: "Issue material", text: "Select an approved QS Cost Code and confirm available stock before Stock Out.", view: "Stock Out" },
-      { title: "Transfer between sites", text: "Dispatch with reference and approver; destination confirms receipt before its stock increases.", view: "Site Transfer" },
-      { title: "Count and adjust", text: "Submit stock counts or quantity-adjustment requests. Management approval changes the balance.", view: "Stock Count" },
-    ],
-    "Site Team": [
-      { title: "Review site stock", text: "View current material availability for assigned sites without changing posted balances.", view: "Current Stock" },
-      { title: "Review movement", text: "Trace posted site transactions and their references for construction coordination.", view: "Transactions" },
-      { title: "Monitor exceptions", text: "Follow site alerts and pending actions routed to responsible control roles.", view: "Alerts" },
-      { title: "Follow procedures", text: "Use the role guide to understand responsibilities and escalation routes.", view: "Help & SOP" },
+      { title: "Physical warehouse maker", text: "Receive, issue, transfer and count physical inventory for assigned sites.", view: "Stock In" },
+      { title: "Stock Out preparation", text: "Prepare material issues without assigning Cost Codes or posting stock.", view: "Stock Out" },
+      { title: "Custody equipment", text: "Checkout, return and report damaged/lost equipment.", view: "Equipment" },
     ],
     QS: [
-      { title: "Maintain BOM control", text: "Select Level 2 and Level 3 Cost Codes, link exact materials and set approved quantities.", view: "BOM Control" },
-      { title: "Check actual usage", text: "Compare BOM approved versus used and investigate negative balances or exceptions.", view: "Reports" },
-      { title: "Review item links", text: "Confirm every Material Code is linked to the correct QS Cost Code before site issuing.", view: "Item Master" },
-      { title: "Monitor exceptions", text: "Review No Approved BOM and Over BOM activity in the notification centre.", view: "Alerts" },
-    ],
-    Management: [
-      { title: "Approve controlled changes", text: "Review evidence, reference and reason before approving adjustments and stock-count variances.", view: "Alerts" },
-      { title: "Review monthly performance", text: "Use management reports for valuation, movement, consumption, BOM and equipment exceptions.", view: "Reports" },
-      { title: "Inspect audit history", text: "Filter by date, site, user and action to verify before, change and after values.", view: "Audit Report" },
-      { title: "Protect records", text: "Export periodic complete backups. Restore remains restricted to the Developer.", view: "Backup & Recovery" },
-    ],
-    PM: [
-      { title: "Monitor project stock", text: "Review project-level stock, movement and operational exceptions without posting transactions.", view: "Dashboard" },
-      { title: "Review reports", text: "Use project reports to monitor valuation, consumption, BOM and equipment exceptions.", view: "Reports" },
-      { title: "Inspect exceptions", text: "Review alerts and escalation items requiring project coordination.", view: "Alerts" },
-      { title: "Trace decisions", text: "Use the audit report to review who changed controlled records and when.", view: "Audit Report" },
+      { title: "Prepare BOM", text: "Maintain Cost Codes, material mappings, quantities and revisions for assigned projects.", view: "BOM Control" },
+      { title: "Resolve cost allocation", text: "Map pending operational transactions to approved cost structures.", view: "BOM Control" },
     ],
   };
   const permissions: Array<{ module: View; purpose: string }> = [
     { module: "Item Master", purpose: "Material catalogue and photos" },
     { module: "BOM Control", purpose: "QS budget and material links" },
     { module: "Current Stock", purpose: "Live site balances and adjustments" },
-    { module: "Stock Count", purpose: "Physical count and variance approval" },
+    { module: "Physical Count", purpose: "Physical count and variance approval" },
     { module: "Transactions", purpose: "Permanent posted activity" },
     { module: "Reports", purpose: "Management reporting and export" },
     { module: "Backup & Recovery", purpose: "Data protection and history" },
@@ -8648,7 +8766,7 @@ function HelpAndSop({ role, allowed, onNavigate }: { role: Role; allowed: View[]
   return (
     <div className="help-sop-layout">
       <article className="panel sop-hero"><div><span className="eyebrow">ROLE WORKSPACE GUIDE</span><h3>{displayedRole} standard operating procedure</h3><p>{role === "Developer" ? "Developer can review every role workflow and open every module." : "Follow these controls to keep stock balances, BOM usage and audit records accurate."}</p></div><span className={`role-pill ${displayedRole === "Developer" ? "developer-role" : ""}`}>{displayedRole}</span></article>
-      {role === "Developer" && <div className="developer-guide-tabs" role="tablist" aria-label="Role workflow guides">{(["Developer", "Admin", "Management", "QS", "Stockkeeper"] as Role[]).map((option) => <button type="button" role="tab" aria-selected={displayedRole === option} className={displayedRole === option ? "active" : ""} key={option} onClick={() => setGuideRole(option)}><span>{option === "Developer" ? "⌘" : option === "Admin" ? "A" : option === "Management" ? "M" : option === "QS" ? "Q" : "S"}</span>{option}</button>)}</div>}
+      {role === "Developer" && <div className="developer-guide-tabs" role="tablist" aria-label="Role workflow guides">{(["Developer", "Admin", "MD", "PD", "FM", "PM", "QSM", "QS", "Stock Controller", "Stockkeeper", "Site Engineer"] as Role[]).map((option) => <button type="button" role="tab" aria-selected={displayedRole === option} className={displayedRole === option ? "active" : ""} key={option} onClick={() => setGuideRole(option)}><span>{option === "Developer" ? "⌘" : option === "Admin" ? "A" : ["MD", "PD", "FM", "PM", "QSM"].includes(option) ? "M" : option === "QS" ? "Q" : option === "Stock Controller" ? "C" : "S"}</span>{option}</button>)}</div>}
       <div className="sop-step-grid">{guides[displayedRole].map((guide, index) => <button type="button" key={guide.title} onClick={() => allowed.includes(guide.view) && onNavigate(guide.view)}><b>{index + 1}</b><span><strong>{guide.title}</strong><small>{guide.text}</small></span><i>Open {guide.view} →</i></button>)}</div>
       <article className="panel sop-rules"><div className="panel-head"><div><span className="eyebrow">MANDATORY CONTROL RULES</span><h3>Rules for every user</h3></div></div><div className="sop-rule-grid"><div><b>01</b><strong>Never delete posted records</strong><small>Reverse or correct with a reason, reference and approver.</small></div><div><b>02</b><strong>Use exact site and item codes</strong><small>Verify the live dropdown selection before saving any movement.</small></div><div><b>03</b><strong>Respect approval separation</strong><small>The requester must not approve their own controlled stock change.</small></div><div><b>04</b><strong>Keep evidence</strong><small>Every delivery, issue, transfer and correction requires a traceable reference.</small></div></div></article>
       <article className="panel"><div className="panel-head"><div><span className="eyebrow">ROLE ACCESS</span><h3>Available modules for {displayedRole}</h3></div><span className="record-count">{displayedAccess.length} modules</span></div><div className="permission-guide-grid">{permissions.map((entry) => <div key={entry.module} className={displayedAccess.includes(entry.module) ? "enabled" : "locked"}><span>{displayedAccess.includes(entry.module) ? "✓" : "×"}</span><div><strong>{entry.module}</strong><small>{entry.purpose}</small></div><b>{displayedAccess.includes(entry.module) ? "AVAILABLE" : "RESTRICTED"}</b></div>)}</div></article>
@@ -8805,12 +8923,12 @@ function BackupRecovery({
         </article>
         <article className="panel backup-action-card restore-card">
           <span className="backup-action-icon">↻</span>
-          <div><span className="eyebrow">CONTROLLED RESTORE</span><h3>Restore selected backup</h3><p>Admin only. The system validates the file and downloads a safety backup before replacing current data.</p></div>
+          <div><span className="eyebrow">CONTROLLED RESTORE</span><h3>Restore selected backup</h3><p>Developer only. The system validates the file and downloads a safety backup before replacing current data.</p></div>
           {canRestore ? <>
             <label className="backup-file-picker">Choose backup file<input type="file" accept="application/json,.json" onChange={selectBackup} /></label>
             {error && <div className="form-error">{error}</div>}
             {selected && <div className="backup-selected"><strong>{selectedName}</strong><small>Created {new Date(selected.createdAt).toLocaleString()} · Revision {selected.sourceRevision} · {selected.items.length} items · {selected.transactions.length} transactions</small><span className={`status ${selected.integrityHash ? "ok" : "warn"}`}>{selected.integrityHash ? `INTEGRITY VERIFIED · ${selected.integrityHash}` : "LEGACY BACKUP · STRUCTURE VALIDATED"}</span><label>Type RESTORE to confirm<input value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></label><button type="button" className="confirm danger-button" disabled={confirmation !== "RESTORE" || restoring} onClick={restore}>{restoring ? "Restoring…" : "Restore backup"}</button></div>}
-          </> : <div className="modal-warning">Management may export backups. Only an Admin can restore data.</div>}
+          </> : <div className="modal-warning">Backup and restore are restricted to the Developer role.</div>}
         </article>
       </div>
       <article className="panel backup-history">
@@ -8967,7 +9085,7 @@ function Alerts({
     ageDays = (value: string) => Math.max(0, Math.floor((alertsCheckedAt - new Date(value).getTime()) / 86400000)),
     reconciliationQueue = [
       ...pendingAdjustments.map((entry) => ({ id: `adjustment-${entry.id}`, category: "Stock adjustment", site: entry.site, subject: `${itemName(entry.code)} · ${entry.code}`, owner: entry.requestedBy, createdAt: entry.requestedAt, view: "Current Stock" as View })),
-      ...pendingCounts.map((entry) => ({ id: `count-${entry.id}`, category: "Stock count", site: entry.site, subject: `${entry.lines.length} counted items`, owner: entry.createdBy, createdAt: entry.submittedAt || entry.createdAt, view: "Stock Count" as View })),
+      ...pendingCounts.map((entry) => ({ id: `count-${entry.id}`, category: "Stock count", site: entry.site, subject: `${entry.lines.length} counted items`, owner: entry.createdBy, createdAt: entry.submittedAt || entry.createdAt, view: "Physical Count" as View })),
       ...pendingTransfers.map((entry) => ({ id: `transfer-${entry.id}`, category: "Transfer receipt", site: `${entry.site} → ${entry.other}`, subject: `${itemName(entry.code)} · ${formatQty(entry.qty)}`, owner: entry.by, createdAt: entry.timestamp || `${entry.date}T00:00:00`, view: "Site Transfer" as View })),
       ...unverifiedTransactions.map((entry) => ({ id: `verify-${entry.id}`, category: "Transaction verification", site: entry.site, subject: `${entry.type} · ${itemName(entry.code)}`, owner: entry.by, createdAt: entry.timestamp || `${entry.date}T00:00:00`, view: "Transactions" as View })),
     ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
@@ -9017,7 +9135,7 @@ function Alerts({
             <span>Stock adjustments</span>
             <small>Review opening-balance and quantity changes</small>
           </button>
-          <button type="button" onClick={() => onNavigate("Stock Count")}>
+          <button type="button" onClick={() => onNavigate("Physical Count")}>
             <strong>{pendingCounts.length}</strong>
             <span>Stock counts</span>
             <small>Approve submitted variance sessions</small>
@@ -9160,9 +9278,11 @@ function EmptyReport() {
 }
 function UserAccess({
   currentUser,
+  currentRole,
   availableSites,
 }: {
   currentUser: string;
+  currentRole: Role;
   availableSites: ProjectSite[];
 }) {
   type AccessUser = {
@@ -9179,6 +9299,7 @@ function UserAccess({
     sites?: string[];
     requestedRole?: Role;
     note?: string;
+    modules?: string[];
   };
   type LoginRow = {
     sessionId: string;
@@ -9228,18 +9349,31 @@ function UserAccess({
     setSaved("");
     setError("");
     try {
+      // Include module configuration if Developer enabled it in the UI
+      const payload: {
+        userId: string;
+        name: string;
+        role: Role;
+        active: boolean;
+        sites: string[];
+        employeeId: string;
+        phone: string;
+        modules?: string;
+      } = {
+        userId: row.userId,
+        name: row.name,
+        role: row.role,
+        active: Boolean(row.active),
+        sites: row.sites ?? (row.site ? [row.site] : []),
+        employeeId: row.employeeId || "",
+        phone: row.phone || "",
+      };
+      // If the UI includes module toggles, row.modules would be present as string[]
+      if (Array.isArray(row.modules)) payload.modules = JSON.stringify(row.modules);
       const response = await fetch("/api/users", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: row.userId,
-          name: row.name,
-          role: row.role,
-          active: Boolean(row.active),
-          sites: row.sites ?? (row.site ? [row.site] : []),
-          employeeId: row.employeeId || "",
-          phone: row.phone || "",
-        }),
+        body: JSON.stringify(payload),
       });
       const data = await readJson<ApiError>(response);
       if (!response.ok) throw new Error(data.error);
@@ -9417,6 +9551,7 @@ function UserAccess({
                     <td>
                       <select
                         value={row.role}
+                        disabled={currentRole === "Admin" && row.role === "Developer"}
                         onChange={(e) =>
                           setUsers((list) =>
                             list.map((u) =>
@@ -9428,13 +9563,10 @@ function UserAccess({
                         }
                       >
                         <option>Admin</option>
-                        <option>Developer</option>
-                        <option>Stock Controller</option>
-                        <option>Stockkeeper</option>
-                        <option>Site Team</option>
-                        <option>QS</option>
-                        <option>PM</option>
-                        <option>Management</option>
+                        {currentRole === "Developer" && <option>Developer</option>}
+                        <option>MD</option><option>PD</option><option>FM</option><option>PM</option>
+                        <option>TMS</option><option>SRA</option><option>TMMEP</option><option>QSM</option>
+                        <option>Site Engineer</option><option>Stock Controller</option><option>Stockkeeper</option><option>QS</option>
                       </select>
                     </td>
                     <td>
@@ -9463,7 +9595,7 @@ function UserAccess({
                       >
                         {saved === row.userId ? "Saved" : "Save changes"}
                       </button>
-                      {row.email !== currentUser && <button type="button" className="table-action danger-button" onClick={() => deleteUser(row)}>Delete</button>}
+                      {currentRole === "Developer" && row.email !== currentUser && <button type="button" className="table-action danger-button" onClick={() => deleteUser(row)}>Delete</button>}
                     </td>
                   </tr>
                 ))}
@@ -9611,13 +9743,10 @@ function UserAccess({
                   }
                 >
                   <option>Admin</option>
-                  <option>Developer</option>
-                  <option>Stock Controller</option>
-                  <option>Stockkeeper</option>
-                  <option>Site Team</option>
-                  <option>QS</option>
-                  <option>PM</option>
-                  <option>Management</option>
+                  {currentRole === "Developer" && <option>Developer</option>}
+                  <option>MD</option><option>PD</option><option>FM</option><option>PM</option>
+                  <option>TMS</option><option>SRA</option><option>TMMEP</option><option>QSM</option>
+                  <option>Site Engineer</option><option>Stock Controller</option><option>Stockkeeper</option><option>QS</option>
                 </select>
               </label>
             </div>
@@ -9690,7 +9819,7 @@ function navIcon(v: View) {
       "Item Master": "▤",
       "BOM Control": "$",
       "Current Stock": "▥",
-      "Stock Count": "✓",
+      "Physical Count": "✓",
       "Stock In": "↓",
       "Stock Out": "↑",
       "Site Transfer": "⇄",

@@ -3,7 +3,7 @@ import { hashSessionToken, verifyPassword } from "../../../auth/password";
 
 export const dynamic = "force-dynamic";
 
-type Role = "Developer" | "Admin" | "Stock Controller" | "Stockkeeper" | "Site Team" | "QS" | "PM" | "Management";
+type Role = "Developer" | "Admin" | "MD" | "PD" | "FM" | "PM" | "TMS" | "SRA" | "TMMEP" | "QSM" | "Site Engineer" | "Stock Controller" | "Stockkeeper" | "QS";
 const WINDOW_MS = 15 * 60 * 1000;
 const MAX_FAILURES = 5;
 

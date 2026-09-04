@@ -44,7 +44,7 @@ export async function PATCH(request: Request) {
   try {
     await context.db!.batch([
       context.db!.prepare("UPDATE users SET display_name=?,updated_at=? WHERE user_id=?").bind(name, now, context.id),
-      context.db!.prepare("INSERT INTO registration_profiles (user_id,employee_id,phone,site,requested_role,note,submitted_at,approved_at,approved_by) SELECT user_id,?,?, '[]',CASE WHEN role='Admin' THEN 'Management' ELSE role END,'',?,?,? FROM users WHERE user_id=? ON CONFLICT(user_id) DO UPDATE SET employee_id=excluded.employee_id,phone=excluded.phone").bind(employeeId||`UNASSIGNED:${context.id}`, phone||"", now, now, context.id, context.id),
+      context.db!.prepare("INSERT INTO registration_profiles (user_id,employee_id,phone,site,requested_role,note,submitted_at,approved_at,approved_by) SELECT user_id,?,?, '[]',role,'',?,?,? FROM users WHERE user_id=? ON CONFLICT(user_id) DO UPDATE SET employee_id=excluded.employee_id,phone=excluded.phone").bind(employeeId||`UNASSIGNED:${context.id}`, phone||"", now, now, context.id, context.id),
       context.db!.prepare("INSERT INTO audit_logs (id,occurred_at,actor_id,actor_email,actor_role,action,from_revision,to_revision,summary) SELECT ?,?,?,?,role,'PROFILE UPDATE',0,0,? FROM users WHERE user_id=?").bind(crypto.randomUUID(), now, context.id, context.email, JSON.stringify({ previous: current, next: { name, employeeId:employeeId||"", phone:phone||"" } }), context.id),
     ]);
   } catch {

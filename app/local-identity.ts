@@ -12,6 +12,21 @@ export type RequestIdentity = {
 
 const LOCAL_ADMIN: RequestIdentity = { id: "local-admin", email: "local.admin@mcb.test", name: "Local Admin", username: "local-admin", role: "Developer" };
 
+// Test override hook for integration tests. Tests may set this to simulate identities.
+// Test override hook: available only in test environment via `process.env.NODE_ENV === 'test'`.
+// This prevents runtime identity bypass in staging/production.
+let TEST_IDENTITY_OVERRIDE: RequestIdentity | null = null;
+
+export function __setTestIdentityOverride(identity: RequestIdentity | null) {
+  // Only allow in Node test environment. Cloudflare Workers and production environments
+  // do not have `process.env.NODE_ENV === 'test'` so this cannot be enabled there.
+  if (typeof process !== 'undefined' && process.env && process.env.NODE_ENV === 'test') {
+    TEST_IDENTITY_OVERRIDE = identity;
+    return;
+  }
+  throw new Error('Test identity override is restricted to test environment');
+}
+
 function isLoopbackHost(host: string | null): boolean {
   if (!host) return false;
   const normalized = host.toLowerCase();
@@ -32,6 +47,7 @@ async function deleteSession(tokenHash: string) {
 }
 
 export async function requestIdentity(): Promise<RequestIdentity | null> {
+  if (TEST_IDENTITY_OVERRIDE) return TEST_IDENTITY_OVERRIDE;
   const h = await headers();
   const sessionToken = cookieValue(h.get("cookie"), "__Host-mcb_session");
   if (sessionToken && env.DB) {

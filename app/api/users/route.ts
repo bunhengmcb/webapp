@@ -2,7 +2,7 @@ import { env } from "cloudflare:workers";
 import { requestIdentity } from "../../local-identity";
 
 export const dynamic = "force-dynamic";
-type Role = "Admin" | "Developer" | "Stock Controller" | "Stockkeeper" | "Site Team" | "QS" | "PM" | "Management";
+type Role = "Developer" | "Admin" | "MD" | "PD" | "FM" | "PM" | "TMS" | "SRA" | "TMMEP" | "QSM" | "Site Engineer" | "Stock Controller" | "Stockkeeper" | "QS";
 
 async function adminContext() {
   const identity = await requestIdentity();
@@ -22,14 +22,14 @@ async function adminContext() {
   )
     .bind(identity.id)
     .first<{ role: Role; active: number }>();
-  if (!actor?.active || actor.role !== "Developer")
+  if (!actor?.active || !["Developer", "Admin"].includes(actor.role))
     return {
       error: Response.json(
-        { error: "Developer permission required" },
+        { error: "Administrator permission required" },
         { status: 403 },
       ),
     };
-  return { db: env.DB, id: identity.id, email: identity.email };
+  return { db: env.DB, id: identity.id, email: identity.email, role: actor.role };
 }
 
 async function activeSiteCodes(db: D1Database) {
@@ -95,7 +95,7 @@ export async function POST(request: Request) {
     sites?: string[];
     role?: Role;
   } | null;
-  const roles: Role[] = ["Admin", "Developer", "Stock Controller", "Stockkeeper", "Site Team", "QS", "PM", "Management"],
+  const roles: Role[] = ["Developer", "Admin", "MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM", "Site Engineer", "Stock Controller", "Stockkeeper", "QS"],
     allowedSites = await activeSiteCodes(context.db!),
     assignedSites = Array.from(new Set(body?.sites ?? [])),
     email = body?.email?.trim().toLowerCase();
@@ -105,7 +105,8 @@ export async function POST(request: Request) {
     !body?.name?.trim() ||
     !body.role ||
     !roles.includes(body.role) ||
-    assignedSites.some((site) => !allowedSites.includes(site))
+    assignedSites.some((site) => !allowedSites.includes(site)) ||
+    (context.role === "Admin" && body.role === "Developer")
   )
     return Response.json(
       { error: "Complete all required user fields" },
@@ -151,7 +152,7 @@ export async function POST(request: Request) {
           now,
           context.id,
           context.email,
-          "Developer",
+          context.role,
           "USER ADDED",
           0,
           0,
@@ -179,7 +180,7 @@ export async function PATCH(request: Request) {
     employeeId?: string;
     phone?: string;
   } | null;
-  const roles: Role[] = ["Admin", "Developer", "Stock Controller", "Stockkeeper", "Site Team", "QS", "PM", "Management"];
+  const roles: Role[] = ["Developer", "Admin", "MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM", "Site Engineer", "Stock Controller", "Stockkeeper", "QS"];
   const displayName = body?.name?.trim(),
     allowedSites = await activeSiteCodes(context.db!),
     assignedSites = Array.from(new Set(body?.sites ?? []));
@@ -190,15 +191,21 @@ export async function PATCH(request: Request) {
     !body.role ||
     !roles.includes(body.role) ||
     typeof body.active !== "boolean" ||
-    assignedSites.some((site) => !allowedSites.includes(site))
+    assignedSites.some((site) => !allowedSites.includes(site)) ||
+    (context.role === "Admin" && body.role === "Developer")
   )
     return Response.json(
       { error: "Enter a valid staff display name and access assignment" },
       { status: 400 },
     );
-  if (body.userId === context.id && (!body.active || body.role !== "Developer"))
+  const targetRole = await context.db!.prepare("SELECT role FROM users WHERE user_id=?").bind(body.userId).first<{ role: Role }>();
+  if (context.role === "Admin" && targetRole?.role === "Developer")
+    return Response.json({ error: "Admin cannot modify Developer accounts" }, { status: 403 });
+  if (context.role === "Admin" && body.role === "Developer")
+    return Response.json({ error: "Admin cannot grant Developer access" }, { status: 403 });
+  if (body.userId === context.id && (!body.active || body.role !== context.role))
     return Response.json(
-      { error: "You cannot remove your own Developer access" },
+      { error: "You cannot deactivate your own account or change your own role" },
       { status: 400 },
     );
   const now = new Date().toISOString();
@@ -236,7 +243,7 @@ export async function PATCH(request: Request) {
       now,
       context.id,
       context.email,
-      "Developer",
+      context.role,
       "USER ACCESS UPDATE",
       0,
       0,
@@ -258,6 +265,7 @@ export async function PATCH(request: Request) {
 export async function DELETE(request: Request) {
   const context = await adminContext();
   if (context.error) return context.error;
+  if (context.role !== "Developer") return Response.json({ error: "Developer permission required for deletion" }, { status: 403 });
   const body = await request.json().catch(() => null) as { userId?: string } | null;
   if (!body?.userId) return Response.json({ error: "User is required" }, { status: 400 });
   if (body.userId === context.id) return Response.json({ error: "You cannot delete your own account" }, { status: 400 });
@@ -269,7 +277,7 @@ export async function DELETE(request: Request) {
     context.db!.prepare("DELETE FROM auth_credentials WHERE user_id=?").bind(body.userId),
     context.db!.prepare("DELETE FROM registration_profiles WHERE user_id=?").bind(body.userId),
     context.db!.prepare("DELETE FROM users WHERE user_id=?").bind(body.userId),
-    context.db!.prepare("INSERT INTO audit_logs (id,occurred_at,actor_id,actor_email,actor_role,action,from_revision,to_revision,summary) VALUES (?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),now,context.id,context.email,"Developer","USER DELETED",0,0,JSON.stringify({ userId: body.userId, email: target.email, name: target.name, role: target.role })),
+    context.db!.prepare("INSERT INTO audit_logs (id,occurred_at,actor_id,actor_email,actor_role,action,from_revision,to_revision,summary) VALUES (?,?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(),now,context.id,context.email,context.role,"USER DELETED",0,0,JSON.stringify({ userId: body.userId, email: target.email, name: target.name, role: target.role })),
   ]);
   return Response.json({ ok: true });
 }

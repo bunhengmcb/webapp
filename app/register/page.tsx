@@ -3,16 +3,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import styles from "./register.module.css";
 
-type RequestedRole = "Admin" | "Stock Controller" | "Storekeeper" | "Site Team" | "QS" | "PM" | "Management";
+type RequestedRole = "Stock Controller" | "Stockkeeper" | "Site Engineer" | "QS";
 
 const roleDescriptions: Record<RequestedRole, string> = {
-  Storekeeper: "Manage stock in/out, inventory transactions and daily stock operations.",
   "Stock Controller": "Verify and post controlled inventory movements across assigned sites.",
-  "Site Team": "View assigned-site inventory and operational records.",
-  QS: "Manage BOM, material requests, approvals and cost control.",
-  PM: "View assigned-project inventory records and controls.",
-  Management: "View dashboards, reports and oversee inventory performance.",
-  Admin: "User management, system setup and administration.",
+  Stockkeeper: "Receive, issue, transfer and count physical inventory for assigned sites.",
+  "Site Engineer": "Request materials and view assigned-site operational inventory.",
+  QS: "Prepare BOM, manage cost codes and resolve cost allocation for assigned projects.",
 };
 
 export default function RegisterPage() {
@@ -24,7 +21,7 @@ export default function RegisterPage() {
   const [employeeId, setEmployeeId] = useState("");
   const [phone, setPhone] = useState("");
   const [site, setSite] = useState("VLS");
-  const [role, setRole] = useState<RequestedRole>("Storekeeper");
+  const [role, setRole] = useState<RequestedRole>("Stockkeeper");
   const [confirmed, setConfirmed] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -152,7 +149,7 @@ export default function RegisterPage() {
           <div className={styles.sectionTitle}><span>3</span><strong>Access Request</strong></div>
 
           <label>Requested Role <b>*</b>
-            <div className={styles.inputWrap}><span>◆</span>{firstAccount ? <input value="Developer" readOnly /> : <select value={role} onChange={e=>setRole(e.target.value as RequestedRole)}><option>Stock Controller</option><option>Storekeeper</option><option>Site Team</option><option>QS</option><option>PM</option><option>Management</option><option>Admin</option></select>}</div>
+            <div className={styles.inputWrap}><span>◆</span>{firstAccount ? <input value="Developer" readOnly /> : <select value={role} onChange={e=>setRole(e.target.value as RequestedRole)}><option>Stock Controller</option><option>Stockkeeper</option><option>Site Engineer</option><option>QS</option></select>}</div>
           </label>
 
           <div className={styles.roleBox}>

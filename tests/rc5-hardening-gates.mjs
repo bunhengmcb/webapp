@@ -15,7 +15,7 @@ const checks = [
   [evidence.includes("authorizedTransaction"), "transaction evidence object authorization"],
   [evidence.includes("fileSignatureMatches"), "transaction evidence signature validation"],
   [evidence.includes("x-mcb-site"), "site-bound pre-transaction evidence upload"],
-  [state.includes('if (role === "Management") return managementApprovalValid(previous, next);'), "Management approval path wired"],
+  [state.includes('if (role === "Admin") return adminChangesValid(previous, next);'), "Admin controlled approval path wired"],
   [state.includes('return !before && record.status === "Pending";'), "Stock Controller cannot self-approve adjustments"],
   [state.includes('before.createdBy !== actorUsername'), "Stock count maker/checker separation"],
   [state.includes("controlledBomQuantity"), "BOM reversal/correction net accounting"],

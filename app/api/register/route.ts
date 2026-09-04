@@ -2,8 +2,8 @@ import { env } from "cloudflare:workers";
 import { constantTimeSecretEqual, createPasswordVerifier } from "../../auth/password";
 
 export const dynamic = "force-dynamic";
-type Role = "Admin" | "Developer" | "Stock Controller" | "Stockkeeper" | "Site Team" | "QS" | "PM" | "Management";
-const requestableRoles: Role[] = ["Admin", "Stock Controller", "Stockkeeper", "Site Team", "QS", "PM", "Management"];
+type Role = "Developer" | "Admin" | "MD" | "PD" | "FM" | "PM" | "TMS" | "SRA" | "TMMEP" | "QSM" | "Site Engineer" | "Stock Controller" | "Stockkeeper" | "QS";
+const requestableRoles: Role[] = ["Stock Controller", "Stockkeeper", "Site Engineer", "QS"];
 const usernamePattern = /^[a-z0-9][a-z0-9._-]{2,39}$/;
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
