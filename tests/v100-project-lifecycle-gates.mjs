@@ -76,7 +76,10 @@ expect(
   ),
   "Stock Out verify/post blocked for Not Active projects",
 );
-
+expect(
+  stateRoute.includes("newEquipmentOnNotActiveSite"),
+  "new Equipment records blocked on Not Active projects",
+);
 if (process.exitCode) {
   console.error("V100 PROJECT LIFECYCLE GATES: FAIL");
   process.exit(process.exitCode);

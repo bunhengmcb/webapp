@@ -1522,10 +1522,19 @@ const newCountsOnNotActiveSite = next.stockCounts.some(
     !previous.stockCounts.some((oldCount) => oldCount.id === count.id),
 );
 
+const newEquipmentOnNotActiveSite = next.equipment.some(
+  (record) =>
+    notActiveSites.has(record.site || "") &&
+    !previous.equipment.some(
+      (oldRecord) => oldRecord.id === record.id,
+    ),
+);
+
 if (
   newTransactionsOnNotActiveSite ||
   newAdjustmentsOnNotActiveSite ||
-  newCountsOnNotActiveSite
+  newCountsOnNotActiveSite ||
+  newEquipmentOnNotActiveSite
 ) {
   return Response.json(
     {
