@@ -37,6 +37,9 @@ type StatePayload = {
     verificationRole?: string;
     verificationNote?: string;
     approvedBy?: string;
+    dispatchedBy?: string;
+    receivedBy?: string;
+    completedBy?: string;
     previousQty?: number;
     newQty?: number;
   }>;
@@ -50,6 +53,9 @@ type StatePayload = {
     approvedQty: number;
     rate?: number;
     approvedBy?: string;
+    dispatchedBy?: string;
+    receivedBy?: string;
+    completedBy?: string;
     previousQty?: number;
     newQty?: number;
   }>;
@@ -59,7 +65,17 @@ type StatePayload = {
     code: string;
     previousQty: number;
     requestedQty: number;
-    status: "Pending" | "Approved" | "Rejected";
+    reference?: string;
+    reason?: string;
+    requestedBy?: string;
+    requestedAt?: string;
+    kind?: "Opening Balance" | "Adjustment";
+    status: "Pending SC" | "Pending Admin" | "Approved" | "Rejected";
+    checkedBy?: string;
+    checkedAt?: string;
+    decidedBy?: string;
+    decidedAt?: string;
+    decisionNote?: string;
   }>;
   sites: Array<{
     code: string;
@@ -94,9 +110,11 @@ remarks?: string;
     site: string;
     createdBy?: string;
     decidedBy?: string;
-    status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Approved" | "Rejected";
-    countType?: "MONTHLY_FULL" | "CYCLE";
+    status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Pending SC" | "Pending Admin" | "Approved" | "Rejected";
+    countType?: "WEEKLY" | "MONTHLY" | "SPOT" | "MONTHLY_FULL" | "CYCLE";
     snapshotAt?: string;
+    checkedAt?: string;
+    checkedBy?: string;
     lines: Array<{
       code: string;
       systemQty: number;
@@ -703,9 +721,11 @@ function stockOnlyChangesFromNewSites(previous: StatePayload, next: StatePayload
     .every(([, quantities]) => Object.keys(quantities).length === 0);
 }
 
-function adminChangesValid(previous: StatePayload, next: StatePayload) {
+function adminChangesValid(previous: StatePayload, next: StatePayload, actorUsername: string) {
   if (changed(previous.adjustments, next.adjustments))
-    return managementApprovalValid(previous, next);
+    return managementApprovalValid(previous, next, actorUsername);
+  if (changed(previous.stockCounts, next.stockCounts))
+    return managementCountApprovalValid(previous, next, actorUsername);
   return (
     !changed(previous.transactions, next.transactions) &&
     !changed(previous.equipment, next.equipment) &&
@@ -745,27 +765,116 @@ function qsChangesValid(
   );
 }
 
-function stockkeeperAdjustmentsValid(previous: StatePayload, next: StatePayload) {
-  return !changed(previous.adjustments, next.adjustments);
+function adjustmentStableForReview(record: StatePayload["adjustments"][number]) {
+  const {
+    status: _status,
+    checkedBy: _checkedBy,
+    checkedAt: _checkedAt,
+    decidedBy: _decidedBy,
+    decidedAt: _decidedAt,
+    decisionNote: _decisionNote,
+    ...rest
+  } = record;
+  return rest;
 }
 
-function stockControllerAdjustmentsValid(
+function hasPriorInventoryMovement(
+  previous: StatePayload,
+  site: string,
+  code: string,
+) {
+  return previous.transactions.some(
+    (record) =>
+      record.site === site &&
+      record.code === code &&
+      [
+        "STOCK IN",
+        "STOCK OUT",
+        "STOCK ADJUSTMENT",
+        "OPENING BALANCE",
+        "STOCK COUNT VARIANCE",
+        "SITE TRANSFER",
+      ].includes(record.type),
+  );
+}
+
+function stockkeeperAdjustmentsValid(
   siteAccess: string[],
   previous: StatePayload,
   next: StatePayload,
 ) {
   if (!changed(previous.adjustments, next.adjustments)) return true;
   if (next.adjustments.length < previous.adjustments.length) return false;
-  const modified = modifiedRecords(previous.adjustments as Array<StatePayload["adjustments"][number] & { id: string }>, next.adjustments as Array<StatePayload["adjustments"][number] & { id: string }>);
-  if (!modified.every((record) => siteAllowed(siteAccess, record.site))) return false;
+  const modified = modifiedRecords(
+    previous.adjustments as Array<StatePayload["adjustments"][number] & { id: string }>,
+    next.adjustments as Array<StatePayload["adjustments"][number] & { id: string }>,
+  );
   return modified.every((record) => {
     const before = previous.adjustments.find((item) => item.id === record.id);
-    return !before && record.status === "Pending";
+    return (
+      !before &&
+      record.kind === "Opening Balance" &&
+      record.status === "Pending SC" &&
+      record.previousQty === 0 &&
+      (previous.stock[record.site]?.[record.code] ?? 0) === 0 &&
+      !hasPriorInventoryMovement(previous, record.site, record.code) &&
+      record.requestedQty >= 0 &&
+      siteAllowed(siteAccess, record.site)
+    );
+  });
+}
+
+function stockControllerAdjustmentsValid(
+  siteAccess: string[],
+  previous: StatePayload,
+  next: StatePayload,
+  actorUsername: string,
+) {
+  if (!changed(previous.adjustments, next.adjustments)) return true;
+  if (next.adjustments.length < previous.adjustments.length) return false;
+  const modified = modifiedRecords(
+    previous.adjustments as Array<StatePayload["adjustments"][number] & { id: string }>,
+    next.adjustments as Array<StatePayload["adjustments"][number] & { id: string }>,
+  );
+  return modified.every((record) => {
+    if (!siteAllowed(siteAccess, record.site)) return false;
+    const before = previous.adjustments.find((item) => item.id === record.id);
+    if (!before) {
+      return (
+        record.kind === "Adjustment" &&
+        record.status === "Pending Admin" &&
+        record.requestedBy === actorUsername &&
+        record.previousQty === (previous.stock[record.site]?.[record.code] ?? 0) &&
+        record.requestedQty >= 0
+      );
+    }
+    if (
+      before.kind === "Opening Balance" &&
+      before.status === "Pending SC" &&
+      ["Pending Admin", "Rejected"].includes(record.status) &&
+      before.requestedBy !== actorUsername &&
+      (previous.stock[record.site]?.[record.code] ?? 0) === before.previousQty &&
+      record.checkedBy === actorUsername &&
+      Boolean(record.checkedAt)
+    ) {
+      return JSON.stringify(adjustmentStableForReview(before)) === JSON.stringify(adjustmentStableForReview(record));
+    }
+    return false;
   });
 }
 
 function transactionStableForTransferTransition(record: StatePayload["transactions"][number]) {
-  const { status: _status, reference: _reference, approvedBy: _approvedBy, ...rest } = record;
+  const {
+    status: _status,
+    reference: _reference,
+    approvedBy: _approvedBy,
+    dispatchedBy: _dispatchedBy,
+    receivedBy: _receivedBy,
+    completedBy: _completedBy,
+    verifiedBy: _verifiedBy,
+    verifiedAt: _verifiedAt,
+    ...rest
+  } = record;
   return rest;
 }
 
@@ -798,15 +907,14 @@ function operationsTransactionsValid(
   siteAccess: string[],
   previous: StatePayload,
   next: StatePayload,
+  actorUsername = "",
 ) {
   if (!changed(previous.transactions, next.transactions)) return true;
   if (next.transactions.length < previous.transactions.length) return false;
   const allowedTypes = new Set(
     role === "Stock Controller"
       ? [
-          "STOCK IN",
           "STOCK OUT",
-          "SITE TRANSFER",
           "STOCK REQUEST",
           "BOM HOLD",
           "EQUIPMENT CHECKOUT",
@@ -851,17 +959,49 @@ function operationsTransactionsValid(
     if (!changed(record, after)) return true;
     if (record.type === "SITE TRANSFER" && !changed(transactionStableForTransferTransition(record), transactionStableForTransferTransition(after))) {
       if (record.status === "Pending Approval" && after.status === "Cancelled" && siteAllowed(siteAccess, record.site)) return true;
-      if (role === "Stock Controller" && record.status === "Pending Approval" && after.status === "Approved / Reserved" && siteAllowed(siteAccess, record.site) && Boolean(after.approvedBy)) return true;
+      if (
+        role === "Stock Controller" &&
+        record.status === "Pending Approval" &&
+        after.status === "Approved / Reserved" &&
+        siteAllowed(siteAccess, record.site) &&
+        Boolean(after.approvedBy) &&
+        record.by !== actorUsername
+      )
+        return true;
       if (record.status === "Approved / Reserved" && after.status === "Cancelled" && siteAllowed(siteAccess, record.site)) return true;
-      if (record.status === "Approved / Reserved" && after.status === "In Transit" && siteAllowed(siteAccess, record.site)) return true;
-      if (record.status === "In Transit" && after.status === "Received" && siteAllowed(siteAccess, record.other)) return true;
+      if (
+        record.status === "Approved / Reserved" &&
+        after.status === "In Transit" &&
+        siteAllowed(siteAccess, record.site) &&
+        after.dispatchedBy === actorUsername
+      )
+        return true;
+      if (
+        record.status === "In Transit" &&
+        after.status === "Received" &&
+        siteAllowed(siteAccess, record.other) &&
+        record.by !== actorUsername &&
+        record.dispatchedBy !== actorUsername &&
+        after.receivedBy === actorUsername &&
+        after.verifiedBy === actorUsername &&
+        Boolean(after.verifiedAt)
+      )
+        return true;
+      if (
+        role === "Stock Controller" &&
+        record.status === "Received" &&
+        after.status === "Completed" &&
+        siteAllowed(siteAccess, record.other) &&
+        after.completedBy === actorUsername
+      )
+        return true;
     }
     if (
       role === "Stock Controller" &&
       siteAllowed(siteAccess, record.site) &&
       record.type === "STOCK IN" &&
       record.status === "Pending Verification" &&
-      after.status === "Posted" &&
+      ["Posted", "Posted - Pending Cost Mapping"].includes(after.status ?? "") &&
       !record.verifiedAt &&
       Boolean(after.verifiedAt) &&
       Boolean(after.approvedBy) &&
@@ -946,7 +1086,7 @@ function operationsStockValid(
       role === "Stock Controller" &&
       before.type === "STOCK IN" &&
       before.status === "Pending Verification" &&
-      after?.status === "Posted" &&
+      ["Posted", "Posted - Pending Cost Mapping"].includes(after?.status ?? "") &&
       before.site &&
       before.code &&
       expected[before.site] &&
@@ -987,41 +1127,80 @@ function operationsCountsValid(
   if (!modified.every((session) => siteAllowed(siteAccess, session.site))) return false;
   return modified.every((session) => {
     const before = previous.stockCounts.find((item) => item.id === session.id);
-    if (!before) return ["Draft", "Pending Recount", "Pending"].includes(session.status);
-    // snapshotAt must be immutable once set
+    if (!before) {
+      return role === "Stockkeeper" && session.status === "Draft" && session.createdBy === actorUsername;
+    }
     if (before.snapshotAt && session.snapshotAt && before.snapshotAt !== session.snapshotAt) return false;
-    const countFlowValid =
-      (before.status === "Draft" && ["Draft", "Pending Recount", "Pending"].includes(session.status)) ||
-      (before.status === "Pending Recount" && session.status === "Recount") ||
-      (before.status === "Recount" && ["Recount", "Pending"].includes(session.status));
-    if (role === "Stockkeeper") return countFlowValid;
-    if (countFlowValid) return true;
-    if (before.status === "Pending")
-      return ["Approved", "Rejected"].includes(session.status) &&
-        Boolean(before.createdBy) &&
-        before.createdBy !== actorUsername;
-    return false;
+    if (role === "Stockkeeper") {
+      if (before.createdBy !== actorUsername) return false;
+      return (
+        (before.status === "Draft" && ["Draft", "Pending Recount", "Pending SC"].includes(session.status)) ||
+        (before.status === "Pending Recount" && session.status === "Recount") ||
+        (before.status === "Recount" && ["Recount", "Pending SC"].includes(session.status))
+      );
+    }
+    if (before.createdBy === actorUsername) return false;
+    if (!["Pending SC", "Pending"].includes(before.status)) return false;
+    const monthly = before.countType === "MONTHLY" || before.countType === "MONTHLY_FULL" || !before.countType;
+    if (monthly) {
+      return ["Pending Admin", "Rejected"].includes(session.status) &&
+        session.checkedBy === actorUsername && Boolean(session.checkedAt);
+    }
+    if (!["Approved", "Rejected"].includes(session.status) || session.decidedBy !== actorUsername) return false;
+    if (session.status === "Rejected") return !changed(previous.stock, next.stock) && !changed(previous.transactions, next.transactions);
+    return countPostingMatches(previous, next, before, session);
   });
 }
 
 function equipmentChangesWithinSites(
+  role: "Stockkeeper" | "Stock Controller",
   siteAccess: string[],
   previous: StatePayload,
   next: StatePayload,
 ) {
   if (!changed(previous.equipment, next.equipment)) return true;
   if (next.equipment.length < previous.equipment.length) return false;
+
   const modified = modifiedRecords(
     previous.equipment as Array<StatePayload["equipment"][number] & { id: string }>,
     next.equipment as Array<StatePayload["equipment"][number] & { id: string }>,
   );
-  return modified.every((record) => siteAllowed(siteAccess, record.site));
+  if (!modified.every((record) => siteAllowed(siteAccess, record.site))) return false;
+
+  const addedTransactions = addedRecords(
+    previous.transactions as Array<StatePayload["transactions"][number] & { id: string }>,
+    next.transactions as Array<StatePayload["transactions"][number] & { id: string }>,
+  );
+  const equipmentTypes = new Set([
+    "EQUIPMENT CHECKOUT",
+    "EQUIPMENT RETURN",
+    "EQUIPMENT DAMAGED",
+    "EQUIPMENT LOST",
+    "EQUIPMENT REPAIR START",
+    "EQUIPMENT REPAIRED",
+    "EQUIPMENT SCRAP",
+  ]);
+  const equipmentTransactions = addedTransactions.filter((record) =>
+    equipmentTypes.has(record.type),
+  );
+  if (!equipmentTransactions.length) return false;
+
+  const allowed = new Set(
+    role === "Stockkeeper"
+      ? ["EQUIPMENT CHECKOUT", "EQUIPMENT RETURN", "EQUIPMENT DAMAGED", "EQUIPMENT LOST"]
+      : ["EQUIPMENT REPAIR START", "EQUIPMENT REPAIRED"],
+  );
+
+  return equipmentTransactions.every(
+    (record) => allowed.has(record.type) && siteAllowed(siteAccess, record.site),
+  );
 }
 
 function stockkeeperChangesValid(
   siteAccess: string[],
   previous: StatePayload,
   next: StatePayload,
+  actorUsername: string,
 ) {
   return (
     !changed(previous.items, next.items) &&
@@ -1029,11 +1208,11 @@ function stockkeeperChangesValid(
     !changed(previous.sites, next.sites) &&
     !changed(previous.costCodeLinks, next.costCodeLinks) &&
     !changed(previous.suppliers, next.suppliers) &&
-    stockkeeperAdjustmentsValid(previous, next) &&
-    operationsTransactionsValid("Stockkeeper", siteAccess, previous, next) &&
+    stockkeeperAdjustmentsValid(siteAccess, previous, next) &&
+    operationsTransactionsValid("Stockkeeper", siteAccess, previous, next, actorUsername) &&
     operationsStockValid("Stockkeeper", siteAccess, previous, next) &&
     operationsCountsValid("Stockkeeper", siteAccess, previous, next) &&
-    equipmentChangesWithinSites(siteAccess, previous, next)
+    equipmentChangesWithinSites("Stockkeeper", siteAccess, previous, next)
   );
 }
 
@@ -1049,11 +1228,11 @@ function stockControllerChangesValid(
     !changed(previous.sites, next.sites) &&
     !changed(previous.costCodeLinks, next.costCodeLinks) &&
     !changed(previous.suppliers, next.suppliers) &&
-    stockControllerAdjustmentsValid(siteAccess, previous, next) &&
-    operationsTransactionsValid("Stock Controller", siteAccess, previous, next) &&
+    stockControllerAdjustmentsValid(siteAccess, previous, next, actorUsername) &&
+    operationsTransactionsValid("Stock Controller", siteAccess, previous, next, actorUsername) &&
     operationsStockValid("Stock Controller", siteAccess, previous, next) &&
     operationsCountsValid("Stock Controller", siteAccess, previous, next, actorUsername) &&
-    equipmentChangesWithinSites(siteAccess, previous, next)
+    equipmentChangesWithinSites("Stock Controller", siteAccess, previous, next)
   );
 }
 
@@ -1066,12 +1245,12 @@ function authorize(
 ) {
   if (role === "Developer") return true;
   if (["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM", "Site Engineer"].includes(role)) return !changed(previous, next);
-  if (role === "Admin") return adminChangesValid(previous, next);
+  if (role === "Admin") return adminChangesValid(previous, next, actorUsername);
   if (role === "QS") return qsChangesValid(siteAccess, previous, next);
   if (role === "Stock Controller")
     return stockControllerChangesValid(siteAccess, previous, next, actorUsername);
   if (role === "Stockkeeper")
-    return stockkeeperChangesValid(siteAccess, previous, next);
+    return stockkeeperChangesValid(siteAccess, previous, next, actorUsername);
   return false;
 }
 
@@ -1119,44 +1298,70 @@ function controlledBomQuantity(
 
 function newBomTransactionsValid(previous: StatePayload, next: StatePayload) {
   const added = addedRecords(
-    previous.transactions as Array<StatePayload["transactions"][number] & { id: string }>,
-    next.transactions as Array<StatePayload["transactions"][number] & { id: string }>,
-  ).filter((record) => ["STOCK IN", "STOCK OUT", "REVERSE TRANSACTION", "CORRECT TRANSACTION"].includes(record.type));
+    previous.transactions as Array<
+      StatePayload["transactions"][number] & { id: string }
+    >,
+    next.transactions as Array<
+      StatePayload["transactions"][number] & { id: string }
+    >,
+  ).filter((record) =>
+    ["STOCK OUT", "REVERSE TRANSACTION", "CORRECT TRANSACTION"].includes(
+      record.type,
+    ),
+  );
 
   for (const record of added) {
-    let controlledType: "STOCK IN" | "STOCK OUT" | null =
-      record.type === "STOCK IN" || record.type === "STOCK OUT" ? record.type : null;
+    let controlledType: "STOCK OUT" | null =
+      record.type === "STOCK OUT" ? "STOCK OUT" : null;
+
     let site = record.site;
     let code = record.code;
     let costCode = record.costCode;
 
     if (!controlledType && record.linkedTransactionId) {
-      const original = next.transactions.find((transaction) => transaction.id === record.linkedTransactionId);
-      if (original?.type === "STOCK IN" || original?.type === "STOCK OUT") {
-        controlledType = original.type;
+      const original = next.transactions.find(
+        (transaction) => transaction.id === record.linkedTransactionId,
+      );
+
+      if (original?.type === "STOCK OUT") {
+        controlledType = "STOCK OUT";
         site = original.site;
         code = original.code;
         costCode = original.costCode;
       }
     }
+
     if (!controlledType) continue;
     if (!site || !code || !costCode) return false;
-    if (record.type === "STOCK IN" && record.qty <= 0) return false;
+
     if (record.type === "STOCK OUT" && record.qty >= 0) return false;
 
     const line = next.bom.find(
-      (entry) => entry.site === site && entry.code === code && entry.costCode === costCode,
+      (entry) =>
+        entry.site === site &&
+        entry.code === code &&
+        entry.costCode === costCode,
     );
+
     if (!line) return false;
-    const controlled = controlledBomQuantity(next.transactions, controlledType, site, code, costCode);
+
+    const controlled = controlledBomQuantity(
+      next.transactions,
+      controlledType,
+      site,
+      code,
+      costCode,
+    );
+
     if (controlled > line.approvedQty + 1e-9) return false;
   }
+
   return true;
 }
 
-function managementApprovalValid(previous: StatePayload, next: StatePayload) {
+function managementApprovalValid(previous: StatePayload, next: StatePayload, actorUsername: string) {
   if (changed(previous.stockCounts, next.stockCounts))
-    return managementCountApprovalValid(previous, next);
+    return managementCountApprovalValid(previous, next, actorUsername);
   if (
     changed(previous.items, next.items) ||
     changed(previous.bom, next.bom) ||
@@ -1179,10 +1384,14 @@ function managementApprovalValid(previous: StatePayload, next: StatePayload) {
     before = previous.adjustments.find((a) => a.id === decision.id);
   if (
     !before ||
-    before.status !== "Pending" ||
+    before.status !== "Pending Admin" ||
     !["Approved", "Rejected"].includes(decision.status)
   )
     return false;
+  if (before.requestedBy === actorUsername || before.checkedBy === actorUsername) return false;
+  if (before.kind === "Opening Balance" && (!before.checkedBy || !before.checkedAt)) return false;
+  if (JSON.stringify(adjustmentStableForReview(before)) !== JSON.stringify(adjustmentStableForReview(decision))) return false;
+  if ((previous.stock[decision.site]?.[decision.code] ?? 0) !== decision.previousQty) return false;
   if (decision.status === "Rejected")
     return (
       !changed(previous.stock, next.stock) &&
@@ -1196,14 +1405,45 @@ function managementApprovalValid(previous: StatePayload, next: StatePayload) {
   return (
     stockChangedCorrectly &&
     newTransactions.length === 1 &&
-    newTransactions[0].type === "STOCK ADJUSTMENT" &&
-    newTransactions[0].qty === decision.requestedQty - decision.previousQty
+    newTransactions[0].type === (decision.kind === "Opening Balance" ? "OPENING BALANCE" : "STOCK ADJUSTMENT") &&
+    newTransactions[0].qty === decision.requestedQty - decision.previousQty &&
+    newTransactions[0].previousQty === decision.previousQty &&
+    newTransactions[0].newQty === decision.requestedQty
   );
+}
+
+function countPostingMatches(
+  previous: StatePayload,
+  next: StatePayload,
+  before: StatePayload["stockCounts"][number],
+  decision: StatePayload["stockCounts"][number],
+) {
+  if (!previous.stock[decision.site]) return false;
+  const expected = decision.lines.filter(
+    (line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty,
+  );
+  const added = next.transactions.filter(
+    (transaction) => !previous.transactions.some((item) => item.id === transaction.id),
+  );
+  if (added.length !== expected.length) return false;
+  for (const line of expected) {
+    const finalQty = line.recountQty ?? line.physicalQty ?? line.systemQty;
+    const tx = added.find((t) => t.type === "STOCK COUNT VARIANCE" && t.code === line.code && t.site === decision.site && Number.isFinite(t.qty));
+    if (!tx) return false;
+    const prevStock = previous.stock[decision.site]?.[line.code] ?? 0;
+    if (tx.previousQty !== prevStock) return false;
+    if (tx.newQty !== finalQty) return false;
+    if (Math.abs(tx.qty - (finalQty - prevStock)) > 1e-9) return false;
+    if (tx.reference !== decision.id) return false;
+    if ((next.stock[decision.site]?.[line.code] ?? 0) !== finalQty) return false;
+  }
+  return true;
 }
 
 function managementCountApprovalValid(
   previous: StatePayload,
   next: StatePayload,
+  actorUsername: string,
 ) {
   if (
     changed(previous.items, next.items) ||
@@ -1228,43 +1468,18 @@ function managementCountApprovalValid(
     before = previous.stockCounts.find((item) => item.id === decision.id);
   if (
     !before ||
-    before.status !== "Pending" ||
+    before.status !== "Pending Admin" ||
     !["Approved", "Rejected"].includes(decision.status)
   )
     return false;
+  if (!before.checkedBy || before.checkedBy === actorUsername || before.createdBy === actorUsername) return false;
+  if (decision.decidedBy !== actorUsername) return false;
   if (decision.status === "Rejected")
     return (
       !changed(previous.stock, next.stock) &&
       !changed(previous.transactions, next.transactions)
     );
-  // For approval, allow intervening stock movements but require posted variance transactions
-  // to reconcile from the current stock to the final counted quantity. The original
-  // snapshot `systemQty` is preserved in the session object and must not be modified.
-  if (!before) return false;
-  if (!previous.stock[decision.site]) return false;
-  const expected = decision.lines.filter(
-      (line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty,
-    ),
-    added = next.transactions.filter(
-      (transaction) =>
-        !previous.transactions.some((item) => item.id === transaction.id),
-    );
-  if (added.length !== expected.length) return false;
-  // Verify each expected variance has a matching variance transaction with correct qty/previous/new quantities
-  for (const line of expected) {
-    const finalQty = line.recountQty ?? line.physicalQty ?? line.systemQty;
-    const tx = added.find((t) => t.type === "STOCK COUNT VARIANCE" && t.code === line.code && t.site === decision.site && Number.isFinite(t.qty));
-    if (!tx) return false;
-    // Transaction should record the stock immediately before posting (previous stock), and the new final qty.
-    const prevStock = previous.stock[decision.site]?.[line.code] ?? 0;
-    if (tx.previousQty != null && tx.previousQty !== prevStock) return false;
-    if (tx.newQty != null && tx.newQty !== finalQty) return false;
-    if (Math.abs(tx.qty - (finalQty - prevStock)) > 1e-9) return false;
-    if (tx.reference != null && tx.reference !== decision.id) return false;
-    // Ensure next.stock reflects previous stock plus this transaction
-    if ((next.stock[decision.site]?.[line.code] ?? 0) !== prevStock + tx.qty) return false;
-  }
-  return true;
+  return countPostingMatches(previous, next, before, decision);
 }
 
 function actionName(previous: StatePayload, next: StatePayload) {
@@ -1366,7 +1581,11 @@ export async function GET() {
               : ["SUP-001"],
           })),
           adjustments: Array.isArray(state.adjustments)
-            ? state.adjustments
+            ? state.adjustments.map((adjustment) => ({
+                ...adjustment,
+                kind: adjustment.kind === "Opening Balance" ? "Opening Balance" : "Adjustment",
+                status: String(adjustment.status) === "Pending" ? "Pending Admin" : adjustment.status,
+              }))
             : [],
           sites: Array.isArray(state.sites)
   ? state.sites.map((site) => ({
@@ -1435,7 +1654,11 @@ export async function PUT(request: Request) {
               ...item,
               supplierIds: Array.isArray(item.supplierIds) ? item.supplierIds : ["SUP-001"],
             })),
-            adjustments: Array.isArray(state.adjustments) ? state.adjustments : [],
+            adjustments: Array.isArray(state.adjustments) ? state.adjustments.map((adjustment) => ({
+              ...adjustment,
+              kind: adjustment.kind === "Opening Balance" ? "Opening Balance" : "Adjustment",
+              status: String(adjustment.status) === "Pending" ? "Pending Admin" : adjustment.status,
+            })) : [],
             sites: Array.isArray(state.sites)
   ? state.sites.map((site) => ({
       ...site,
@@ -1469,7 +1692,11 @@ const previous: StatePayload = {
         : ["SUP-001"],
     })),
     adjustments: Array.isArray(parsedPrevious.adjustments)
-      ? parsedPrevious.adjustments
+      ? parsedPrevious.adjustments.map((adjustment) => ({
+          ...adjustment,
+          kind: adjustment.kind === "Opening Balance" ? "Opening Balance" : "Adjustment",
+          status: String(adjustment.status) === "Pending" ? "Pending Admin" : adjustment.status,
+        }))
       : [],
     sites: Array.isArray(parsedPrevious.sites)
   ? parsedPrevious.sites.map((site) => ({
@@ -1546,7 +1773,7 @@ if (
 }
   if (!newBomTransactionsValid(previous, next))
     return Response.json(
-      { error: "Stock In/Out is blocked because the approved BOM would be exceeded or is not linked" },
+      { error: "Stock Out is blocked because the approved BOM would be exceeded or is not linked" },
       { status: 409 },
     );
   if (!transferReservationsValid(next))

@@ -89,7 +89,11 @@ export async function POST(request: Request) {
   type StockOutRow = { code: string; qty: number | string; costCode?: string; issuedTo?: string; remark?: string };
   type StockOutBody = { site?: string; rows?: StockOutRow[]; transactionDate?: string; sheetRef?: string; draft?: boolean } | null;
   const body = (await request.json().catch(() => null)) as StockOutBody;
-  if (!body || !body.site || !Array.isArray(body.rows) || !body.transactionDate) return Response.json({ error: 'Invalid payload' }, { status: 400 });
+  if (!body || !body.site || !Array.isArray(body.rows) || !body.rows.length || !body.transactionDate) return Response.json({ error: 'Invalid payload' }, { status: 400 });
+  if (!body.sheetRef?.trim()) return Response.json({ error: 'OPS / Daily Sheet Reference is required' }, { status: 400 });
+  if (body.rows.some((line) => !line.code || !Number.isFinite(Number(line.qty)) || Number(line.qty) <= 0 || !line.issuedTo?.trim())) {
+    return Response.json({ error: 'Each Stock Out row requires item, positive quantity and Requested/Issued To' }, { status: 400 });
+  }
   if (ctx.role !== 'Stockkeeper' && ctx.role !== 'Developer') return Response.json({ error: 'Stockkeeper maker role required' }, { status: 403 });
   if (!canUseSite(ctx, body.site))
   return Response.json(
@@ -159,15 +163,25 @@ export async function PUT(request: Request) {
     // Allow verifier to submit updated payload (e.g., assign cost codes)
     const body = (await request.json().catch(() => null)) as { rows?: Array<{ code?: string; qty?: number | string; costCode?: string }>; sheetRef?: string; transactionDate?: string } | null;
     let updatedPayload = row.payload;
-    if (body && body.rows && Array.isArray(body.rows)) {
-      updatedPayload = JSON.stringify({ rows: body.rows, sheetRef: body.sheetRef || '', transactionDate: body.transactionDate || JSON.parse(row.payload).transactionDate });
-    }
-    // Ensure all rows have costCode before verifying
     try {
+      const original = JSON.parse(row.payload) as { rows?: Array<{ code?: string; qty?: number | string; costCode?: string; issuedTo?: string; remark?: string }>; sheetRef?: string; transactionDate?: string };
+      const submitted = body?.rows;
+      if (submitted && Array.isArray(submitted)) {
+        if (!original.rows || submitted.length !== original.rows.length) return Response.json({ error: 'Verifier cannot add or remove Stock Out rows' }, { status: 409 });
+        const merged = original.rows.map((makerLine, index) => {
+          const verifierLine = submitted[index] || {};
+          if (verifierLine.code !== makerLine.code || Number(verifierLine.qty) !== Number(makerLine.qty)) {
+            throw new Error('CORE_MUTATION');
+          }
+          return { ...makerLine, costCode: String(verifierLine.costCode || '').trim().toUpperCase() };
+        });
+        updatedPayload = JSON.stringify({ rows: merged, sheetRef: original.sheetRef || row.reference || '', transactionDate: original.transactionDate });
+      }
       const parsed = JSON.parse(updatedPayload) as { rows?: Array<{ costCode?: string }> };
       const missing = (parsed.rows || []).some((r) => !(r.costCode && String(r.costCode).trim()));
       if (missing) return Response.json({ error: 'All rows must have a QS cost code assigned before verification' }, { status: 400 });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.message === 'CORE_MUTATION') return Response.json({ error: 'Verifier may assign cost codes but cannot change maker item or quantity' }, { status: 409 });
       return Response.json({ error: 'Invalid payload' }, { status: 400 });
     }
     await db.prepare("UPDATE stock_out_requests SET payload=?,status=?,verified_at=?,verified_by=? WHERE id=?").bind(updatedPayload, 'Verified', now, ctx.id, id).run();
@@ -193,11 +207,11 @@ export async function PUT(request: Request) {
       const available = Math.max(0, onHand - reserved);
       if (Math.abs(qty) > available) return Response.json({ error: `Insufficient available stock for ${code}` }, { status: 409 });
       // BOM check
-      const bline = (state.bom || []).find((b) => b.site === fresh.site && b.code === code && b.costCode === (line.costCode || '').trim().toUpperCase());
-      if (bline) {
-        const used = (state.transactions || []).filter((t) => t.type === 'STOCK OUT' && t.site === fresh.site && t.code === code && t.costCode === bline.costCode).reduce((s, t) => s + Math.abs(Math.min(0, t.qty ?? 0)), 0);
-        if (used + Math.abs(qty) > (bline.approvedQty ?? 0)) return Response.json({ error: `BOM limit exceeded for ${code} / ${bline.costCode}` }, { status: 409 });
-      }
+      const normalizedCostCode = (line.costCode || '').trim().toUpperCase();
+      const bline = (state.bom || []).find((b) => b.site === fresh.site && b.code === code && b.costCode === normalizedCostCode);
+      if (!bline) return Response.json({ error: `Approved BOM mapping required for ${code} / ${normalizedCostCode || 'NO COST CODE'}` }, { status: 409 });
+      const used = (state.transactions || []).filter((t) => t.type === 'STOCK OUT' && t.site === fresh.site && t.code === code && t.costCode === bline.costCode).reduce((s, t) => s + Math.abs(Math.min(0, t.qty ?? 0)), 0);
+      if (used + Math.abs(qty) > (bline.approvedQty ?? 0)) return Response.json({ error: `BOM limit exceeded for ${code} / ${bline.costCode}` }, { status: 409 });
     }
     // Attempt conditional update to prevent duplicate posts
     const upd = await db.prepare("UPDATE stock_out_requests SET status=?,posted_at=?,posted_by=? WHERE id=? AND status='Verified'").bind('Posted', now, ctx.id, id).run();

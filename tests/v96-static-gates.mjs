@@ -12,7 +12,7 @@ for (const role of ['Developer','Admin','MD','PD','FM','PM','TMS','SRA','TMMEP',
 }
 assert(state.includes('["MD", "PD", "FM", "PM", "TMS", "SRA", "TMMEP", "QSM", "Site Engineer"].includes(role)) return !changed(previous, next);'), 'management/site engineer generic state mutations must remain read-only until explicit workflow APIs apply');
 assert(state.includes('return stockControllerChangesValid(siteAccess, previous, next, actorUsername)'), 'Stock Controller server authorization missing');
-assert(state.includes('return stockkeeperChangesValid(siteAccess, previous, next)'), 'Stockkeeper server authorization missing');
+assert(state.includes('return stockkeeperChangesValid(siteAccess, previous, next, actorUsername)'), 'Stockkeeper server authorization missing');
 assert(state.includes('if (controlled > line.approvedQty + 1e-9) return false;'), 'Strict BOM server limit missing');
 assert(state.includes('record.status === "Pending Verification"'), 'Stock In pending verification flow missing');
 assert(page.includes('Daily Stock Out'), 'Daily Stock Out UI missing');
@@ -32,8 +32,8 @@ assert(migration.includes('UOM_REVIEW'), 'Migration must flag missing UOM for re
 console.log('V96 STATIC GATES: PASS');
 
 // RC4 physical count gate: first count with variance must force variance-only recount before approval.
-assert(page.includes('status: hasVariance ? "Pending Recount" : "Pending"'), "Physical count variance must enter Pending Recount");
+assert(page.includes('status: hasVariance ? "Pending Recount" : "Pending SC"'), "Physical count variance must enter Pending Recount");
 assert(page.includes('function startRecount()'), "Variance recount transition missing");
 assert(page.includes('function submitRecount()'), "Variance recount submission missing");
 assert(page.includes('line.recountQty ?? line.physicalQty ?? line.systemQty'), "Final count must prefer recount quantity");
-assert(state.includes('"Pending Recount" | "Recount" | "Pending"'), "Backend stock-count recount states missing");
+assert(state.includes('"Pending Recount" | "Recount" | "Pending" | "Pending SC" | "Pending Admin"'), "Backend stock-count recount states missing");

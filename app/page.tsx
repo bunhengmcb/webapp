@@ -54,6 +54,9 @@ type Tx = {
   supplierId?: string;
   linkedTransactionId?: string;
   approvedBy?: string;
+  dispatchedBy?: string;
+  receivedBy?: string;
+  completedBy?: string;
   evidenceName?: string;
   evidenceType?: string;
   verifiedBy?: string;
@@ -106,7 +109,10 @@ type StockAdjustment = {
   reason: string;
   requestedBy: string;
   requestedAt: string;
-  status: "Pending" | "Approved" | "Rejected";
+  kind: "Opening Balance" | "Adjustment";
+  status: "Pending SC" | "Pending Admin" | "Approved" | "Rejected";
+  checkedBy?: string;
+  checkedAt?: string;
   decidedBy?: string;
   decidedAt?: string;
   decisionNote?: string;
@@ -170,8 +176,10 @@ type StockCountSession = {
   site: string;
   createdAt: string;
   createdBy: string;
-  status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Approved" | "Rejected";
-  countType?: "MONTHLY_FULL" | "CYCLE";
+  status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Pending SC" | "Pending Admin" | "Approved" | "Rejected";
+  countType?: "WEEKLY" | "MONTHLY" | "SPOT" | "MONTHLY_FULL" | "CYCLE";
+  checkedAt?: string;
+  checkedBy?: string;
   lines: Array<{ code: string; systemQty: number; physicalQty: number | null; recountQty?: number | null }>;
   submittedAt?: string;
   decidedAt?: string;
@@ -1230,7 +1238,7 @@ export default function Home() {
     visibleTransactions.filter(
       (t) => t.type === "SITE TRANSFER" && t.status === "In Transit",
     ).length +
-    visibleAdjustments.filter((a) => a.status === "Pending").length +
+    visibleAdjustments.filter((a) => a.status === "Pending SC" || a.status === "Pending Admin").length +
     visibleStockCounts.filter((session) => session.status === "Pending").length +
     visibleTransactions.filter((t) => !t.verifiedAt).length +
     pendingUserCount;
@@ -1479,7 +1487,7 @@ export default function Home() {
               role={user.role}
               adjustments={adjustments}
               setAdjustments={setAdjustments}
-              canEdit={["Developer", "Stock Controller"].includes(user.role)}
+              canEdit={["Developer", "Stock Controller", "Stockkeeper"].includes(user.role)}
               flash={flash}
             />
           )}
@@ -1551,6 +1559,7 @@ export default function Home() {
               stock={stock}
               setTransactions={setTransactions}
               user={user.username}
+              role={user.role}
               flash={flash}
             />
           )}
@@ -3156,15 +3165,16 @@ function StockCountModule({
   flash: (message: string) => void;
 }) {
   const [site, setSite] = useState(accessibleSites[0] ?? ""),
-    [countType, setCountType] = useState<"MONTHLY_FULL" | "CYCLE">("MONTHLY_FULL"),
+    [countType, setCountType] = useState<"WEEKLY" | "MONTHLY" | "SPOT">("MONTHLY"),
     [activeId, setActiveId] = useState("") ,
     [note, setNote] = useState("") ,
     [report, setReport] = useState<StockCountSession | null>(null),
     [filter, setFilter] = useState<"All" | "Uncounted" | "Variance" | "Completed">("All"),
     [searchQ, setSearchQ] = useState("");
   const active = sessions.find((session) => session.id === activeId);
-  const canCount = ["Developer", "Stock Controller", "Stockkeeper"].includes(role);
-  const canApprove = ["Stock Controller", "Developer"].includes(role);
+  const canCount = ["Developer", "Stockkeeper"].includes(role);
+  const canSCReview = ["Stock Controller", "Developer"].includes(role);
+  const canAdminPost = ["Admin", "Developer"].includes(role);
   function createSession() {
     const session: StockCountSession = {
       id: `COUNT-${nowDate().replaceAll("-", "")}-${String(sessions.length + 1).padStart(3, "0")}`,
@@ -3221,7 +3231,7 @@ function StockCountModule({
         session.id === active.id
           ? {
               ...session,
-              status: hasVariance ? "Pending Recount" : "Pending",
+              status: hasVariance ? "Pending Recount" : "Pending SC",
               submittedAt: now,
               snapshotAt: now,
             }
@@ -3248,20 +3258,44 @@ function StockCountModule({
       flash("Recount every variance item before submission");
       return;
     }
-    setSessions((list) => list.map((session) => session.id === active.id ? { ...session, status: "Pending", submittedAt: new Date().toISOString() } : session));
+    setSessions((list) => list.map((session) => session.id === active.id ? { ...session, status: "Pending SC", submittedAt: new Date().toISOString() } : session));
     flash("Variance recount submitted for Stock Controller review");
   }
-  function decide(approved: boolean) {
-    if (!active || active.status !== "Pending" || !note.trim()) {
+  function varianceTransactionsFor(session: StockCountSession, decisionNote: string) {
+    return session.lines
+      .filter((line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty)
+      .map((line) => {
+        const final = line.recountQty ?? line.physicalQty ?? line.systemQty;
+        const previousQty = stock[session.site]?.[line.code] ?? line.systemQty;
+        return {
+          id: uid(),
+          date: nowDate(),
+          type: "STOCK COUNT VARIANCE",
+          site: session.site,
+          other: "",
+          code: line.code,
+          qty: final - previousQty,
+          by: user,
+          status: "Approved",
+          reference: session.id,
+          reason: decisionNote,
+          timestamp: new Date().toISOString(),
+          previousQty,
+          newQty: final,
+        } satisfies Tx;
+      });
+  }
+
+  function finaliseCount(approved: boolean) {
+    if (!active || !["Pending SC", "Pending Admin", "Pending"].includes(active.status) || !note.trim()) {
       flash("Enter an approval or rejection note");
       return;
     }
-    if (
-      approved &&
-      active.lines.some(
-        (line) => (stock[active.site]?.[line.code] ?? 0) !== line.systemQty,
-      )
-    ) {
+    if (active.createdBy === user && role !== "Developer") {
+      flash("Count maker cannot approve or post the same count");
+      return;
+    }
+    if (approved && active.lines.some((line) => (stock[active.site]?.[line.code] ?? 0) !== line.systemQty)) {
       flash("Stock changed after counting. Create a new count session.");
       return;
     }
@@ -3273,64 +3307,56 @@ function StockCountModule({
       decisionNote: note.trim(),
     };
     if (approved) {
-      // Create variance transactions that reconcile current stock to final counted qty.
-      const varianceTransactions = active.lines
-        .filter(
-          (line) => (line.recountQty ?? line.physicalQty ?? line.systemQty) !== line.systemQty,
-        )
-        .map((line) => {
-          const final = line.recountQty ?? line.physicalQty ?? line.systemQty;
-          const previousQty = (stock[active.site]?.[line.code] ?? line.systemQty);
-          return {
-            id: uid(),
-            date: nowDate(),
-            type: "STOCK COUNT VARIANCE",
-            site: active.site,
-            other: "",
-            code: line.code,
-            qty: final - previousQty,
-            by: user,
-            status: "Approved",
-            reference: active.id,
-            reason: note.trim(),
-            timestamp: new Date().toISOString(),
-            previousQty: previousQty,
-            newQty: final,
-          };
-        });
-      // Update stock to reflect variance transactions applied to current stock
+      const varianceTransactions = varianceTransactionsFor(active, note.trim());
       setStock((previous) => ({
         ...previous,
         [active.site]: {
           ...previous[active.site],
-          ...Object.fromEntries(
-            varianceTransactions.map((tx) => [tx.code, (previous[active.site]?.[tx.code] ?? 0) + tx.qty]),
-          ),
+          ...Object.fromEntries(varianceTransactions.map((tx) => [tx.code, (previous[active.site]?.[tx.code] ?? 0) + tx.qty])),
         },
       }));
-      setTransactions((list) => [...varianceTransactions, ...list]);
+      setTransactions((current) => [...varianceTransactions, ...current]);
     }
-    setSessions((list) =>
-      list.map((session) => (session.id === active.id ? decided : session)),
-    );
+    setSessions((list) => list.map((session) => session.id === active.id ? decided : session));
     setNote("");
-    setReport(decided);
-    flash(
-      approved
-        ? "Count approved and stock updated"
-        : "Count rejected; stock unchanged",
-    );
+    flash(approved ? "Physical count approved and posted" : "Physical count rejected");
   }
+
+  function reviewByStockController(approved: boolean) {
+    if (!active || !["Pending SC", "Pending"].includes(active.status) || !note.trim()) {
+      flash("Enter a Stock Controller review note");
+      return;
+    }
+    if (active.createdBy === user && role !== "Developer") {
+      flash("Count maker cannot review the same count");
+      return;
+    }
+    const monthly = active.countType === "MONTHLY" || active.countType === "MONTHLY_FULL";
+    if (!approved) {
+      finaliseCount(false);
+      return;
+    }
+    if (!monthly) {
+      finaliseCount(true);
+      return;
+    }
+    const now = new Date().toISOString();
+    setSessions((list) => list.map((session) => session.id === active.id ? {
+      ...session,
+      status: "Pending Admin",
+      checkedAt: now,
+      checkedBy: user,
+      decisionNote: note.trim(),
+    } : session));
+    setNote("");
+    flash("Monthly count checked by Stock Controller and sent to Admin for final verification/posting");
+  }
+
   const shortages =
-      active?.lines.filter(
-        (line) =>
-          line.physicalQty !== null && line.physicalQty < line.systemQty,
-      ).length ?? 0,
+      active?.lines.filter((line) => line.physicalQty !== null && line.physicalQty < line.systemQty).length ?? 0,
     surpluses =
-      active?.lines.filter(
-        (line) =>
-          line.physicalQty !== null && line.physicalQty > line.systemQty,
-      ).length ?? 0;
+      active?.lines.filter((line) => line.physicalQty !== null && line.physicalQty > line.systemQty).length ?? 0;
+
   return (
     <>
       <div className="stock-count-layout">
@@ -3347,9 +3373,10 @@ function StockCountModule({
                     <option key={value}>{value}</option>
                   ))}
                 </select>
-                <select value={countType} onChange={(e) => setCountType(e.target.value as "MONTHLY_FULL" | "CYCLE")}>
-                  <option value="MONTHLY_FULL">Monthly Full Count</option>
-                  <option value="CYCLE">Cycle Count</option>
+                <select value={countType} onChange={(e) => setCountType(e.target.value as "WEEKLY" | "MONTHLY" | "SPOT")}>
+                  <option value="WEEKLY">Weekly Count</option>
+                  <option value="MONTHLY">Monthly Count</option>
+                  <option value="SPOT">Spot Check</option>
                 </select>
                 <button className="primary" onClick={createSession}>
                   + New physical count
@@ -3385,7 +3412,7 @@ function StockCountModule({
                 >
                   <strong>{session.id}</strong>
                   <span>
-                    {session.site} · {session.countType === "CYCLE" ? "Cycle Count" : "Monthly Full Count"} · {new Date(session.createdAt).toLocaleDateString()}
+                    {session.site} · {session.countType === "WEEKLY" ? "Weekly Count" : session.countType === "SPOT" || session.countType === "CYCLE" ? "Spot Check" : "Monthly Count"} · {new Date(session.createdAt).toLocaleDateString()}
                   </span>
                   <small className="progress">
                     {session.lines.filter((l) => l.physicalQty != null).length}/{session.lines.length} counted · {session.lines.filter((l) => (l.recountQty ?? l.physicalQty ?? l.systemQty) !== l.systemQty).length} variance
@@ -3500,22 +3527,20 @@ function StockCountModule({
               {active.status === "Recount" && canCount && (
                 <button className="primary" onClick={submitRecount}>Submit recount</button>
               )}
-              {active.status === "Pending" && canApprove && (
+              {["Pending SC", "Pending"].includes(active.status) && canSCReview && (
                 <>
-                  <input
-                    value={note}
-                    onChange={(e) => setNote(e.target.value)}
-                    placeholder="Required decision note"
-                  />
-                  <button
-                    className="secondary count-reject"
-                    onClick={() => decide(false)}
-                  >
-                    Reject
+                  <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Required Stock Controller review note" />
+                  <button className="secondary count-reject" onClick={() => reviewByStockController(false)}>Reject</button>
+                  <button className="primary" onClick={() => reviewByStockController(true)}>
+                    {active.countType === "MONTHLY" || active.countType === "MONTHLY_FULL" ? "Check & Send to Admin" : "Approve & Post"}
                   </button>
-                  <button className="primary" onClick={() => decide(true)}>
-                    Approve & update stock
-                  </button>
+                </>
+              )}
+              {active.status === "Pending Admin" && canAdminPost && (
+                <>
+                  <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Required Admin verification note" />
+                  <button className="secondary count-reject" onClick={() => finaliseCount(false)}>Reject</button>
+                  <button className="primary" onClick={() => finaliseCount(true)}>Verify & Post</button>
                 </>
               )}
               {["Approved", "Rejected"].includes(active.status) && (
@@ -3664,12 +3689,20 @@ function CurrentStock({
   const stockExportRows: Array<Array<string | number>> = [["Site", "Item Code", "Item", "Khmer Name", "Category", "UOM", "Minimum", "On Hand", "Status"], ...rows.map((row) => [row.site, row.item.code, row.item.name, row.item.khmer, row.item.category, row.item.unit, row.item.min, row.qty, row.qty <= 0 ? "OUT OF STOCK" : row.qty <= row.item.min ? "LOW STOCK" : "AVAILABLE"])];
   const selectedItem = items.find((i) => i.code === code)!;
   const currentQty = stock[openingSite]?.[code] ?? 0;
+  const adjustmentKind: "Opening Balance" | "Adjustment" =
+    role === "Stockkeeper" ? "Opening Balance" : "Adjustment";
+
   function addDraft(e: FormEvent) {
     e.preventDefault();
     const n = Number(qty),
       cleanReference = reference.trim(),
       cleanReason = reason.trim();
     if (n < 0 || qty === "" || !cleanReference || !cleanReason) return;
+    if (role === "Stockkeeper" && currentQty !== 0) {
+      flash("Opening Balance is only allowed while the current balance is zero");
+      return;
+    }
+    if (!["Developer", "Stock Controller", "Stockkeeper"].includes(role)) return;
     setDrafts((p) => [
       ...p.filter((d) => !(d.site === openingSite && d.code === code)),
       {
@@ -3684,8 +3717,9 @@ function CurrentStock({
     setQty("");
     setReference("");
     setReason("");
-    flash("Counted balance added to adjustment batch");
+    flash(`${adjustmentKind} added to controlled batch`);
   }
+
   function postBatch() {
     if (!drafts.length) return;
     const requests: StockAdjustment[] = drafts.map((d) => ({
@@ -3698,17 +3732,57 @@ function CurrentStock({
       reason: d.reason,
       requestedBy: user,
       requestedAt: new Date().toISOString(),
-      status: "Pending",
+      kind: adjustmentKind,
+      status: role === "Stockkeeper" ? "Pending SC" : "Pending Admin",
     }));
     setAdjustments((current) => [...requests, ...current]);
     setDrafts([]);
-    flash(`${requests.length} stock adjustments submitted for approval`);
+    flash(
+      role === "Stockkeeper"
+        ? `${requests.length} opening balance request(s) submitted to Stock Controller`
+        : `${requests.length} stock adjustment request(s) submitted to Admin`,
+    );
   }
+
+  function checkOpeningBalance(
+    request: StockAdjustment,
+    decision: "Pending Admin" | "Rejected",
+  ) {
+    const note = (decisionNotes[request.id] || "").trim();
+    if (request.requestedBy === user) {
+      flash("Maker/checker control: you cannot check your own opening balance");
+      return;
+    }
+    if (decision === "Rejected" && !note) {
+      flash("Enter a rejection reason first");
+      return;
+    }
+    setAdjustments((current) =>
+      current.map((item) =>
+        item.id === request.id
+          ? {
+              ...item,
+              status: decision,
+              checkedBy: user,
+              checkedAt: new Date().toISOString(),
+              decisionNote: note || item.decisionNote,
+            }
+          : item,
+      ),
+    );
+    setDecisionNotes((current) => ({ ...current, [request.id]: "" }));
+    flash(decision === "Pending Admin" ? "Opening Balance checked and sent to Admin" : "Opening Balance rejected");
+  }
+
   function decideAdjustment(
     request: StockAdjustment,
     decision: "Approved" | "Rejected",
   ) {
     const note = (decisionNotes[request.id] || "").trim();
+    if (request.requestedBy === user || request.checkedBy === user) {
+      flash("Maker/checker control: the final approver must be independent");
+      return;
+    }
     if (decision === "Rejected" && !note) {
       flash("Enter a rejection reason first");
       return;
@@ -3717,9 +3791,7 @@ function CurrentStock({
       decision === "Approved" &&
       (stock[request.site]?.[request.code] ?? 0) !== request.previousQty
     ) {
-      flash(
-        "Stock changed after this request. Reject it and submit a new count.",
-      );
+      flash("Stock changed after this request. Reject it and submit a new request.");
       return;
     }
     const decidedAt = new Date().toISOString();
@@ -3735,7 +3807,7 @@ function CurrentStock({
         {
           id: uid(),
           date: nowDate(),
-          type: "STOCK ADJUSTMENT",
+          type: request.kind === "Opening Balance" ? "OPENING BALANCE" : "STOCK ADJUSTMENT",
           site: request.site,
           other: "",
           code: request.code,
@@ -3755,22 +3827,12 @@ function CurrentStock({
     setAdjustments((current) =>
       current.map((item) =>
         item.id === request.id
-          ? {
-              ...item,
-              status: decision,
-              decidedBy: user,
-              decidedAt,
-              decisionNote: note,
-            }
+          ? { ...item, status: decision, decidedBy: user, decidedAt, decisionNote: note }
           : item,
       ),
     );
     setDecisionNotes((current) => ({ ...current, [request.id]: "" }));
-    flash(
-      decision === "Approved"
-        ? "Adjustment approved and stock updated"
-        : "Adjustment rejected without changing stock",
-    );
+    flash(decision === "Approved" ? `${request.kind} approved and stock updated` : `${request.kind} rejected without changing stock`);
   }
   return (
     <div className="stock-page">
@@ -3782,11 +3844,11 @@ function CurrentStock({
           >
             <div>
               <span className="eyebrow">CONTROLLED BALANCE ENTRY</span>
-              <h3>Opening balance & adjustment</h3>
+              <h3>{adjustmentKind}</h3>
               <p>
-                Enter the verified physical count. The system posts only the
-                difference and keeps the old and new quantities in the audit
-                trail.
+                {role === "Stockkeeper"
+                  ? "Opening Balance: Stockkeeper submits → Stock Controller checks → Admin verifies/posts."
+                  : "Adjustment: Stock Controller submits → Admin verifies/posts. Current Stock is never edited directly."}
               </p>
             </div>
             <label>
@@ -3862,7 +3924,7 @@ function CurrentStock({
               <div className="batch-title">
                 <div>
                   <span className="eyebrow">PENDING BATCH</span>
-                  <h3>{drafts.length} controlled balances ready</h3>
+                  <h3>{drafts.length} {adjustmentKind.toLowerCase()} request(s) ready</h3>
                 </div>
                 <button className="primary" onClick={postBatch}>
                   Submit for approval
@@ -3892,11 +3954,11 @@ function CurrentStock({
             <span className="eyebrow">STOCK ADJUSTMENT CONTROL</span>
             <h3>Approval register</h3>
             <small>
-              Stock changes only after Stock Controller approval. The Developer can intervene only for controlled recovery.
+              Opening Balance follows Stockkeeper → Stock Controller → Admin. Adjustments follow Stock Controller → Admin. Stock changes only at final Admin post; Developer is recovery-only.
             </small>
           </div>
           <span className="record-count">
-            {adjustments.filter((a) => a.status === "Pending").length} pending
+            {adjustments.filter((a) => a.status === "Pending SC" || a.status === "Pending Admin").length} pending
           </span>
         </div>
         {adjustments.length ? (
@@ -3908,6 +3970,7 @@ function CurrentStock({
                     "Requested",
                     "Site",
                     "Item",
+                    "Type",
                     "Reference / Reason",
                     "Before",
                     "Requested",
@@ -3946,6 +4009,7 @@ function CurrentStock({
                       </strong>
                       <small className="code">{request.code}</small>
                     </td>
+                    <td><span className="status">{request.kind}</span></td>
                     <td>
                       <strong>{request.reference}</strong>
                       <small>{request.reason}</small>
@@ -3966,8 +4030,8 @@ function CurrentStock({
                     </td>
                     <td>{request.requestedBy}</td>
                     <td>
-                      {request.status === "Pending" &&
-                      ["Admin", "Developer"].includes(role) ? (
+                      {((request.status === "Pending SC" && ["Stock Controller", "Developer"].includes(role)) ||
+                        (request.status === "Pending Admin" && ["Admin", "Developer"].includes(role))) ? (
                         <div className="approval-actions">
                           <input
                             value={decisionNotes[request.id] || ""}
@@ -3983,16 +4047,20 @@ function CurrentStock({
                             type="button"
                             className="approve"
                             onClick={() =>
-                              decideAdjustment(request, "Approved")
+                              request.status === "Pending SC"
+                                ? checkOpeningBalance(request, "Pending Admin")
+                                : decideAdjustment(request, "Approved")
                             }
                           >
-                            Approve
+                            {request.status === "Pending SC" ? "Check & Send to Admin" : "Approve & Post"}
                           </button>
                           <button
                             type="button"
                             className="reject"
                             onClick={() =>
-                              decideAdjustment(request, "Rejected")
+                              request.status === "Pending SC"
+                                ? checkOpeningBalance(request, "Rejected")
+                                : decideAdjustment(request, "Rejected")
                             }
                           >
                             Reject
@@ -4942,7 +5010,9 @@ function MovementForm({
     const status = requiresVerification
       ? "Pending Verification"
       : mode === "IN"
-        ? "Posted"
+        ? normalized
+          ? "Posted"
+          : "Posted - Pending Cost Mapping"
         : "BOM linked";
     const transactionId = uid();
     try { await uploadTransactionEvidence(transactionId, evidence, site); } catch (uploadError) { setError(uploadError instanceof Error ? uploadError.message : "Evidence upload failed"); return; }
@@ -4990,7 +5060,7 @@ function MovementForm({
       setError("Quantity must be greater than zero");
       return;
     }
-    if (!normalized || !validCodes.includes(normalized)) {
+    if (mode === "OUT" && (!normalized || !validCodes.includes(normalized))) {
       setError("Select an approved QS Cost Code");
       return;
     }
@@ -5012,7 +5082,11 @@ function MovementForm({
       setInsufficientQty(n);
       return;
     }
-    if (bomLine && controlledBefore + n > bomLine.approvedQty) {
+    if (
+      mode === "OUT" &&
+      bomLine &&
+      controlledBefore + n > bomLine.approvedQty
+    ) {
       setPendingQty(n);
       return;
     }
@@ -5140,15 +5214,19 @@ function MovementForm({
             <label>
               QS Cost Code
               <select
-                required
+                required={mode === "OUT"}
                 value={costCode}
                 onChange={(e) => setCostCode(e.target.value)}
-                disabled={!validCodes.length}
+                disabled={mode === "OUT" && !validCodes.length}
               >
                 <option value="">
                   {validCodes.length
-                    ? "Select approved cost code"
-                    : "No approved BOM cost code"}
+                    ? mode === "IN"
+                      ? "Optional — select cost code if known"
+                      : "Select approved cost code"
+                    : mode === "IN"
+                      ? "No mapping yet — receive as Pending Cost Mapping"
+                      : "No approved BOM cost code"}
                 </option>
                 {validCodes.map((c) => (
                   <option key={c} value={c}>
@@ -5209,15 +5287,21 @@ function MovementForm({
             className="primary"
             type="submit"
             disabled={
-              !validCodes.length || (mode === "IN" && !approvedSuppliers.length)
+              mode === "IN"
+                ? role === "Stock Controller" || !approvedSuppliers.length
+                : !validCodes.length
             }
           >
-            {validCodes.length && (mode === "OUT" || approvedSuppliers.length)
-              ? mode === "IN"
-                ? role === "Stockkeeper" ? "Submit receipt for verification" : "Post stock receipt"
-                : "Confirm stock issue"
-              : mode === "IN" && !approvedSuppliers.length
-                ? "Approved supplier required"
+            {mode === "IN"
+              ? role === "Stock Controller"
+                ? "Checker role — verify submitted receipts"
+                : approvedSuppliers.length
+                  ? role === "Stockkeeper"
+                    ? "Submit receipt for verification"
+                    : "Post stock receipt"
+                  : "Approved supplier required"
+              : validCodes.length
+                ? "Confirm stock issue"
                 : "Approved BOM required"}
           </button>
         </form>
@@ -5232,23 +5316,26 @@ function MovementForm({
             </strong>
           </div>
           <StockStatus qty={available} min={item.min} />
-          <div className={`bom-link-state ${bomLine ? "linked" : "unlinked"}`}>
+          <div className={`bom-link-state ${mode === "IN" ? (costCode ? "linked" : "unlinked") : (bomLine ? "linked" : "unlinked")}`}>
             <small>
-              {mode === "IN" ? "BOM PURCHASE CONTROL" : "BOM ISSUE CONTROL"}
+              {mode === "IN" ? "COST MAPPING STATUS" : "BOM ISSUE CONTROL"}
             </small>
             <strong>
-              {bomLine
-                ? `${bomLine.costCode} · ${formatQty(bomLine.approvedQty)} approved · ${formatQty(controlledBefore)} ${mode === "IN" ? "purchased" : "issued"}`
-                : validCodes.length
-                  ? "Select an approved cost code"
-                  : "Create an approved BOM line first"}
+              {mode === "IN"
+                ? costCode
+                  ? `Mapped to ${costCode}`
+                  : "Pending Cost Mapping"
+                : bomLine
+                  ? `${bomLine.costCode} · ${formatQty(bomLine.approvedQty)} approved · ${formatQty(controlledBefore)} issued`
+                  : validCodes.length
+                    ? "Select an approved cost code"
+                    : "Create an approved BOM line first"}
             </strong>
           </div>
           <p className="control-note">
             {mode === "IN"
-              ? "Stock In is checked against cumulative purchased quantity."
-              : "Stock Out is checked against cumulative issued quantity."}{" "}
-            Any amount above the approved BOM is blocked and must be resolved by QS through an approved BOM revision.
+              ? "Stock In may be received before cost mapping is complete. Missing mapping is recorded as Pending Cost Mapping and does not block receipt."
+              : "Stock Out is checked against cumulative issued quantity. Any amount above the approved BOM is blocked and must be resolved by QS through an approved BOM revision."}
           </p>
         </aside>
       </div>
@@ -5261,12 +5348,10 @@ function MovementForm({
         >
           <section className="budget-modal">
             <div className="modal-icon">!</div>
-            <span className="eyebrow">
-              {mode === "IN" ? "BOM PURCHASE CONTROL" : "BOM ISSUE CONTROL"}
-            </span>
+            <span className="eyebrow">BOM ISSUE CONTROL</span>
             <h2 id="overbudget-title">Approved BOM limit reached</h2>
             <p>
-              This {mode === "IN" ? "Stock In" : "Stock Out"} would exceed the
+              This Stock Out would exceed the
               approved BOM for <strong>{item.name}</strong> at{" "}
               <strong>{site}</strong>.
             </p>
@@ -5279,18 +5364,14 @@ function MovementForm({
                 <span>${(bomLine.approvedQty * bomLine.rate).toFixed(2)}</span>
               </div>
               <div>
-                <small>
-                  {mode === "IN" ? "Purchased before" : "Issued before"}
-                </small>
+                <small>Issued before</small>
                 <strong>
                   {formatQty(controlledBefore)} {item.unit}
                 </strong>
                 <span>${(controlledBefore * bomLine.rate).toFixed(2)}</span>
               </div>
               <div>
-                <small>
-                  {mode === "IN" ? "New Stock In" : "New Stock Out"}
-                </small>
+                <small>New Stock Out</small>
                 <strong>
                   {formatQty(pendingQty)} {item.unit}
                 </strong>
@@ -5328,13 +5409,13 @@ function MovementForm({
                       site,
                       other: "",
                       code,
-                      qty: mode === "IN" ? holdQty : -holdQty,
+                      qty: -holdQty,
                       by: user,
                       status: "Pending QS Revision",
                       costCode: costCode.trim().toUpperCase(),
                       reference: reference.trim(),
                       person: person.trim(),
-                      reason: `${mode === "IN" ? "Stock In" : "Stock Out"} blocked: approved BOM ${formatQty(bomLine.approvedQty)}, current controlled ${formatQty(controlledBefore)}, requested ${formatQty(holdQty)}`,
+                      reason: `Stock Out blocked: approved BOM ${formatQty(bomLine.approvedQty)}, current issued ${formatQty(controlledBefore)}, requested ${formatQty(holdQty)}`,
                       timestamp: new Date().toISOString(),
                     },
                     ...prev,
@@ -5866,7 +5947,7 @@ function TransferForm({
   const pendingTransfers = transactions.filter(
     (t) =>
       t.type === "SITE TRANSFER" &&
-      ["Pending Approval", "Approved / Reserved", "In Transit"].includes(t.status) &&
+      ["Pending Approval", "Approved / Reserved", "In Transit", "Received"].includes(t.status) &&
       (accessibleSites.includes(t.site) || accessibleSites.includes(t.other)),
   );
   async function submit(e: FormEvent) {
@@ -5920,6 +6001,10 @@ function TransferForm({
   }
   function approveTransfer(t: Tx) {
     if (!["Developer", "Stock Controller"].includes(role) || !accessibleSites.includes(t.site)) return;
+    if (t.by === user) {
+      flash("Transfer approval blocked: maker and checker must be different users.");
+      return;
+    }
     const availableAtSource = Math.max(0, (stock[t.site]?.[t.code] ?? 0) - reservedTransferQty(transactions, t.site, t.code));
     if (t.qty > availableAtSource) {
       flash(`Transfer approval blocked: only ${formatQty(availableAtSource)} is available at ${t.site}.`);
@@ -5937,7 +6022,7 @@ function TransferForm({
       return;
     }
     setStock((current) => ({ ...current, [t.site]: { ...current[t.site], [t.code]: (current[t.site]?.[t.code] ?? 0) - t.qty } }));
-    setTransactions((current) => current.map((x) => x.id === t.id ? { ...x, status: "In Transit", reference: `${x.reference || ""} · Dispatched ${new Date().toISOString()}` } : x));
+    setTransactions((current) => current.map((x) => x.id === t.id ? { ...x, status: "In Transit", dispatchedBy: user, reference: `${x.reference || ""} · Dispatched ${new Date().toISOString()}` } : x));
     flash(`Transfer dispatched from ${t.site} · destination receipt is required`);
   }
 
@@ -5949,6 +6034,10 @@ function TransferForm({
 
   function receiveTransfer(t: Tx) {
     if (!accessibleSites.includes(t.other) || t.status !== "In Transit") return;
+    if (t.by === user || t.dispatchedBy === user) {
+      flash("Transfer receipt blocked: the maker or dispatcher cannot confirm destination receipt.");
+      return;
+    }
     setStock((p) => ({
       ...p,
       [t.other]: {
@@ -5962,12 +6051,32 @@ function TransferForm({
           ? {
               ...x,
               status: "Received",
+              receivedBy: user,
+              verifiedBy: user,
+              verifiedAt: new Date().toISOString(),
               reference: `${x.reference || ""} · Received ${new Date().toISOString()}`,
             }
           : x,
       ),
     );
     flash(`Transfer received at ${t.other}`);
+  }
+
+  function completeTransfer(t: Tx) {
+    if (!["Developer", "Stock Controller"].includes(role) || !accessibleSites.includes(t.other) || t.status !== "Received") return;
+    setTransactions((current) =>
+      current.map((x) =>
+        x.id === t.id
+          ? {
+              ...x,
+              status: "Completed",
+              completedBy: user,
+              reference: `${x.reference || ""} · Completed ${new Date().toISOString()}`,
+            }
+          : x,
+      ),
+    );
+    flash(`Transfer completed and reconciled at ${t.other}`);
   }
   function requestTransferStock(requested: number) {
     const shortfall = Math.max(requested - available, 1);
@@ -6143,14 +6252,17 @@ function TransferForm({
                     <td>{t.by}</td>
                     <td>
                       <div className="inline-actions">
-                        {t.status === "Pending Approval" && ["Developer", "Stock Controller"].includes(role) && accessibleSites.includes(t.site) && (
+                        {t.status === "Pending Approval" && ["Developer", "Stock Controller"].includes(role) && accessibleSites.includes(t.site) && t.by !== user && (
                           <button type="button" className="table-action" onClick={() => approveTransfer(t)}>Approve & reserve</button>
                         )}
                         {t.status === "Approved / Reserved" && accessibleSites.includes(t.site) && (
                           <button type="button" className="table-action" onClick={() => dispatchTransfer(t)}>Dispatch</button>
                         )}
-                        {t.status === "In Transit" && accessibleSites.includes(t.other) && (
+                        {t.status === "In Transit" && accessibleSites.includes(t.other) && t.by !== user && t.dispatchedBy !== user && (
                           <button type="button" className="table-action" onClick={() => receiveTransfer(t)}>Confirm receipt</button>
+                        )}
+                        {t.status === "Received" && ["Developer", "Stock Controller"].includes(role) && accessibleSites.includes(t.other) && (
+                          <button type="button" className="table-action" onClick={() => completeTransfer(t)}>Complete</button>
                         )}
                         {["Pending Approval", "Approved / Reserved"].includes(t.status) && accessibleSites.includes(t.site) && (
                           <button type="button" className="table-action" onClick={() => cancelTransfer(t)}>Cancel</button>
@@ -6376,6 +6488,7 @@ function EquipmentPanel({
   stock,
   setTransactions,
   user,
+  role,
   flash,
 }: {
   initialCode?: string;
@@ -6385,6 +6498,7 @@ function EquipmentPanel({
   stock: Stock;
   setTransactions: React.Dispatch<React.SetStateAction<Tx[]>>;
   user: string;
+  role: Role;
   flash: (m: string) => void;
 }) {
   const equipmentCodes = items.filter((item) => item.type === "Equipment" || item.type === "Small Tools").map((item) => item.code);
@@ -6457,6 +6571,7 @@ function EquipmentPanel({
             "Checked Out",
             "Awaiting Repair",
             "Under Repair",
+            "Under Investigation",
             "Lost",
             "Scrapped",
           ].includes(r.status),
@@ -6468,6 +6583,10 @@ function EquipmentPanel({
     returnRecord = visibleRecords.find((r) => r.id === returnId);
   async function submit(e: FormEvent) {
     e.preventDefault();
+    if (!["Stockkeeper", "Developer"].includes(role)) {
+      setError("Only Stockkeeper can issue equipment. Stock Controller verifies lifecycle exceptions.");
+      return;
+    }
     const n = Number(checkoutQty);
     if (!borrower) return;
     const borrowerKey = borrower.trim().toLocaleLowerCase();
@@ -6581,7 +6700,7 @@ function EquipmentPanel({
               ...record,
               id: uid(),
               qty: lost,
-              status: "Lost",
+              status: "Under Investigation",
               partialReturn: false,
               actualReturn: returnDate,
               returnTime,
@@ -6653,7 +6772,7 @@ function EquipmentPanel({
               code: record.code,
               qty: 0,
               by: user,
-              status: "Lost",
+              status: "Under Investigation",
               reference: `${lost} lost · ${incidentNote.trim()}`,
               person: receivedBy.trim(),
               timestamp,
@@ -6690,6 +6809,10 @@ function EquipmentPanel({
   function receive(e: FormEvent) {
     e.preventDefault();
     setReturnError("");
+    if (!["Stockkeeper", "Developer"].includes(role)) {
+      setReturnError("Only Stockkeeper can process physical equipment returns.");
+      return;
+    }
     if (!returnRecord || !receivedBy.trim() || !returnDate || !returnTime) {
       setReturnValidation("missing");
       return;
@@ -6729,6 +6852,10 @@ function EquipmentPanel({
     continueValidatedReturn();
   }
   function updateRepair(record: Equipment) {
+    if (!["Stock Controller", "Developer"].includes(role)) {
+      flash("Stock Controller verification is required for repair lifecycle changes");
+      return;
+    }
     const starting = record.status === "Awaiting Repair";
     const timestamp = new Date().toISOString();
     const nextStatus = starting ? "Under Repair" : "Returned";
@@ -6773,6 +6900,10 @@ function EquipmentPanel({
     );
   }
   function confirmScrap() {
+    if (role !== "Developer") {
+      flash("Scrap requires management-controlled approval. Direct operational scrap is blocked.");
+      return;
+    }
     if (!scrapRecord || !scrapReason.trim()) return;
     const timestamp = new Date().toISOString();
     setRecords((p) =>
@@ -6929,7 +7060,9 @@ function EquipmentPanel({
             </label>
           </div>
           {error && <div className="form-error">{error}</div>}
-          <button className="primary">Check out equipment</button>
+          <button className="primary" disabled={!['Stockkeeper', 'Developer'].includes(role)}>
+            {['Stockkeeper', 'Developer'].includes(role) ? "Check out equipment" : "Stockkeeper checkout only"}
+          </button>
         </form>
         <aside className="panel balance-card">
           <span className="eyebrow">LIVE AVAILABILITY</span>
@@ -7054,8 +7187,8 @@ function EquipmentPanel({
           <input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" onChange={(event) => setReturnEvidence(event.target.files?.[0] ?? null)} />
           <small>{returnEvidence ? `${returnEvidence.name} · ${(returnEvidence.size / 1024 / 1024).toFixed(1)} MB` : "Required for damaged/lost cases · optional for good return"}</small>
         </label>
-        <button className="primary" disabled={!outstanding.length}>
-          Process return
+        <button className="primary" disabled={!outstanding.length || !['Stockkeeper', 'Developer'].includes(role)}>
+          {['Stockkeeper', 'Developer'].includes(role) ? "Process return" : "Stockkeeper return only"}
         </button>
         {returnError && (
           <div className="form-error full-error">{returnError}</div>
@@ -7128,7 +7261,7 @@ function EquipmentPanel({
                     </td>
                     <td>
                       <span
-                        className={`status ${r.status === "Returned" ? "ok" : ["Awaiting Repair", "Under Repair", "Lost"].includes(r.status) || r.expected < nowDate() ? "danger" : "warn"}`}
+                        className={`status ${r.status === "Returned" ? "ok" : ["Awaiting Repair", "Under Repair", "Under Investigation", "Lost"].includes(r.status) || r.expected < nowDate() ? "danger" : "warn"}`}
                       >
                         {r.status === "Checked Out" && r.expected < nowDate()
                           ? "Overdue"
@@ -7138,7 +7271,7 @@ function EquipmentPanel({
                       </span>
                     </td>
                     <td>
-                      {r.status === "Checked Out" ? (
+                      {r.status === "Checked Out" && ["Stockkeeper", "Developer"].includes(role) ? (
                         <button
                           type="button"
                           className="table-action"
@@ -7148,7 +7281,7 @@ function EquipmentPanel({
                             ? "Return remaining"
                             : "Process return"}
                         </button>
-                      ) : r.status === "Awaiting Repair" ? (
+                      ) : r.status === "Awaiting Repair" && ["Stock Controller", "Developer"].includes(role) ? (
                         <button
                           type="button"
                           className="table-action"
@@ -7156,7 +7289,7 @@ function EquipmentPanel({
                         >
                           Start repair
                         </button>
-                      ) : r.status === "Under Repair" ? (
+                      ) : r.status === "Under Repair" && ["Stock Controller", "Developer"].includes(role) ? (
                         <span className="repair-actions">
                           <button
                             type="button"
@@ -7165,13 +7298,15 @@ function EquipmentPanel({
                           >
                             Mark repaired
                           </button>
-                          <button
-                            type="button"
-                            className="table-action scrap"
-                            onClick={() => setScrapRecord(r)}
-                          >
-                            Scrap
-                          </button>
+                          {role === "Developer" && (
+                            <button
+                              type="button"
+                              className="table-action scrap"
+                              onClick={() => setScrapRecord(r)}
+                            >
+                              Scrap
+                            </button>
+                          )}
                         </span>
                       ) : (
                         "—"
@@ -7607,6 +7742,9 @@ function Transactions({ rows, setRows, stock, setStock, user, role, canCorrect, 
     if (!mayVerify(verificationTarget)) { flash("Independent verification required: another Stock Controller or the Developer must sign this transaction"); return; }
     const verifiedAt = new Date().toISOString();
     const postsPendingStockIn = verificationTarget.type === "STOCK IN" && verificationTarget.status === "Pending Verification";
+    const postedStockInStatus = verificationTarget.costCode
+      ? "Posted"
+      : "Posted - Pending Cost Mapping";
     if (postsPendingStockIn)
       setStock((current) => ({
         ...current,
@@ -7617,7 +7755,7 @@ function Transactions({ rows, setRows, stock, setStock, user, role, canCorrect, 
       }));
     setRows((list) => list.map((row) => row.id === verificationTarget.id ? {
       ...row,
-      status: postsPendingStockIn ? "Posted" : row.status,
+      status: postsPendingStockIn ? postedStockInStatus : row.status,
       approvedBy: postsPendingStockIn ? user : row.approvedBy,
       verifiedBy: user,
       verifiedAt,
@@ -8945,7 +9083,7 @@ function BackupRecovery({
     ...costCodeLinks.filter((link) => !itemCodes.has(link.itemCode) || !validCostCodes.has(link.costCode)).map((link) => ({ severity: "Warning" as const, area: "Cost Code Links", record: `${link.costCode} → ${link.itemCode}`, detail: !itemCodes.has(link.itemCode) ? "Linked item does not exist" : "Linked Level 3 cost code does not exist" })),
     ...Object.entries(stock).flatMap(([site, balances]) => Object.entries(balances).filter(([, qty]) => qty < 0).map(([code, qty]) => ({ severity: "Critical" as const, area: "Current Stock", record: `${site} · ${code}`, detail: `Negative balance ${formatQty(qty)}` }))),
     ...Object.entries(stock).flatMap(([site, balances]) => activeSiteCodes.has(site) ? [] : Object.entries(balances).filter(([, qty]) => qty !== 0).map(([code, qty]) => ({ severity: "Warning" as const, area: "Project/Site", record: `${site} · ${code}`, detail: `Inactive or unknown site retains ${formatQty(qty)} units` }))),
-    ...adjustments.filter((entry) => entry.status === "Pending" && integrityCheckedAt - new Date(entry.requestedAt).getTime() > 7 * 86400000).map((entry) => ({ severity: "Warning" as const, area: "Approvals", record: entry.id, detail: "Stock adjustment pending more than 7 days" })),
+    ...adjustments.filter((entry) => (entry.status === "Pending SC" || entry.status === "Pending Admin") && integrityCheckedAt - new Date(entry.requestedAt).getTime() > 7 * 86400000).map((entry) => ({ severity: "Warning" as const, area: "Approvals", record: entry.id, detail: "Stock adjustment pending more than 7 days" })),
   ];
   const criticalIssues = integrityIssues.filter((issue) => issue.severity === "Critical");
   const integrityExportRows: Array<Array<string>> = [["Severity", "Area", "Record", "Detail"], ...integrityIssues.map((issue) => [issue.severity, issue.area, issue.record, issue.detail])];
@@ -9175,7 +9313,7 @@ function Alerts({
     pendingTransfers = transactions.filter(
       (t) => t.type === "SITE TRANSFER" && t.status === "In Transit",
     ),
-    pendingAdjustments = adjustments.filter((a) => a.status === "Pending"),
+    pendingAdjustments = adjustments.filter((a) => a.status === "Pending SC" || a.status === "Pending Admin"),
     pendingCounts = stockCounts.filter((session) => session.status === "Pending"),
     unverifiedTransactions = transactions.filter((transaction) => !transaction.verifiedAt),
     ageDays = (value: string) => Math.max(0, Math.floor((alertsCheckedAt - new Date(value).getTime()) / 86400000)),
