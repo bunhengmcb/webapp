@@ -365,12 +365,14 @@ async function initialize(db: D1Database) {
   const userSchema = await db
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='users'")
     .first<{ sql: string }>();
-  if (userSchema?.sql?.includes("CHECK (role IN"))
+   if (userSchema?.sql?.includes("CHECK (role IN")) {
     await db.batch([
-      db.prepare("CREATE TABLE users_role_migration (user_id TEXT PRIMARY KEY NOT NULL,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,display_name TEXT,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL, modules TEXT)"),
+      db.prepare("CREATE TABLE users_role_migration (user_id TEXT PRIMARY KEY NOT NULL,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,display_name TEXT,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL,modules TEXT)"),
       db.prepare("INSERT INTO users_role_migration (user_id,email,name,display_name,role,active,created_at,updated_at,modules) SELECT user_id,email,name,display_name,role,active,created_at,updated_at,modules FROM users"),
+      db.prepare("DROP TABLE users"),
       db.prepare("ALTER TABLE users_role_migration RENAME TO users"),
     ]);
+  }
 }
 
 function assignedSites(value: string | null | undefined) {
