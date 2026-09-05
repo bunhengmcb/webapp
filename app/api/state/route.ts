@@ -344,7 +344,7 @@ async function initialize(db: D1Database) {
       "CREATE TABLE IF NOT EXISTS app_state (id INTEGER PRIMARY KEY NOT NULL CHECK (id = 1), revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0), payload TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by TEXT NOT NULL)",
     ),
     db.prepare(
-      "CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY NOT NULL, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, display_name TEXT, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)), created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS users (user_id TEXT PRIMARY KEY NOT NULL, email TEXT NOT NULL UNIQUE, name TEXT NOT NULL, display_name TEXT, role TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)), created_at TEXT NOT NULL, updated_at TEXT NOT NULL, modules TEXT)",
     ),
     db.prepare(
       "CREATE TABLE IF NOT EXISTS audit_logs (id TEXT PRIMARY KEY NOT NULL, occurred_at TEXT NOT NULL, actor_id TEXT NOT NULL, actor_email TEXT NOT NULL, actor_role TEXT NOT NULL, action TEXT NOT NULL, from_revision INTEGER NOT NULL, to_revision INTEGER NOT NULL, summary TEXT NOT NULL)",
@@ -367,9 +367,8 @@ async function initialize(db: D1Database) {
     .first<{ sql: string }>();
   if (userSchema?.sql?.includes("CHECK (role IN"))
     await db.batch([
-      db.prepare("CREATE TABLE users_role_migration (user_id TEXT PRIMARY KEY NOT NULL,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,display_name TEXT,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"),
-      db.prepare("INSERT INTO users_role_migration (user_id,email,name,display_name,role,active,created_at,updated_at) SELECT user_id,email,name,display_name,role,active,created_at,updated_at FROM users"),
-      db.prepare("DROP TABLE users"),
+      db.prepare("CREATE TABLE users_role_migration (user_id TEXT PRIMARY KEY NOT NULL,email TEXT NOT NULL UNIQUE,name TEXT NOT NULL,display_name TEXT,role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),created_at TEXT NOT NULL,updated_at TEXT NOT NULL, modules TEXT)"),
+      db.prepare("INSERT INTO users_role_migration (user_id,email,name,display_name,role,active,created_at,updated_at,modules) SELECT user_id,email,name,display_name,role,active,created_at,updated_at,modules FROM users"),
       db.prepare("ALTER TABLE users_role_migration RENAME TO users"),
     ]);
 }
@@ -602,9 +601,9 @@ function validState(value: unknown): value is StatePayload {
       !/^[A-Z0-9-]{2,12}$/.test(site.code) ||
       siteCodes.has(site.code) ||
       !site.name?.trim() ||
-      !!["Active", "On Progress", "Handover", "Defect", "Not Active"].includes(
+      !["Active", "On Progress", "Handover", "Defect", "Not Active"].includes(
   site.status,
-) ||
+)||
 !["Standard", "Non-Standard"].includes(site.costCodeStandard)
     )
       return false;
@@ -647,7 +646,7 @@ function validState(value: unknown): value is StatePayload {
         a.previousQty < 0 ||
         !Number.isFinite(a.requestedQty) ||
         a.requestedQty < 0 ||
-        !["Pending", "Approved", "Rejected"].includes(a.status),
+        !["Pending", "Pending SC", "Pending Admin", "Approved", "Rejected"].includes(a.status),
     )
   )
     return false;
@@ -656,10 +655,19 @@ function validState(value: unknown): value is StatePayload {
       (session) =>
         !session?.id ||
         !siteCodes.has(session.site) ||
-        !["Draft", "Pending Recount", "Recount", "Pending", "Approved", "Rejected"].includes(
+        ![
+  "Draft",
+  "Pending Recount",
+  "Recount",
+  "Pending",
+  "Pending SC",
+  "Pending Admin",
+  "Approved",
+  "Rejected",
+].includes(
           session.status,
         ) ||
-        (session.countType != null && !["MONTHLY_FULL", "CYCLE"].includes(session.countType)) ||
+        (session.countType != null && !["WEEKLY", "MONTHLY", "SPOT", "MONTHLY_FULL", "CYCLE"].includes(session.countType)) ||
         (session.status !== "Draft" && (!session.snapshotAt || isNaN(Date.parse(session.snapshotAt)))) ||
         !Array.isArray(session.lines) ||
         session.lines.some(
