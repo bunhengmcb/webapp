@@ -907,6 +907,7 @@ export default function Home() {
   const [authRequired, setAuthRequired] = useState(false);
   const revisionRef = useRef(0);
   const hydratedRef = useRef(false);
+  const suppressNextAutosaveRef = useRef(false);
   const [operationsOpen, setOperationsOpen] = useState(true);
   const [masterOpen, setMasterOpen] = useState(true);
   const [reviewOpen, setReviewOpen] = useState(true);
@@ -996,6 +997,7 @@ export default function Home() {
                 stockCounts: previous.stockCounts ?? [],
               };
           } catch {}
+        suppressNextAutosaveRef.current = true;
         items = shared.items.map((item: Item) => ({
           ...item,
           supplierIds: Array.isArray(item.supplierIds)
@@ -1057,6 +1059,10 @@ export default function Home() {
   }, [user?.role]);
   useEffect(() => {
     if (!sessionReady || !user || !hydratedRef.current) return;
+    if (suppressNextAutosaveRef.current) {
+      suppressNextAutosaveRef.current = false;
+      return;
+    }
     const timer = setTimeout(async () => {
       setSyncStatus("saving");
       try {
@@ -1081,6 +1087,7 @@ export default function Home() {
         });
         const data = await readJson<ApiError & { state?: InventoryState; revision: number }>(response);
         if (response.status === 409 && data.state) {
+          suppressNextAutosaveRef.current = true;
           items = data.state.items.map((item: Item) => ({
             ...item,
             supplierIds: Array.isArray(item.supplierIds)
