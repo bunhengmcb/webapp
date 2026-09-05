@@ -89,7 +89,7 @@ type StatePayload = {
   | "Handover"
   | "Defect"
   | "Not Active";
-costCodeStandard: "Standard" | "Non-Standard";
+costCodeStandard?: "Standard" | "Non-Standard";
 plannedCompletionDate?: string;
 actualCompletionDate?: string;
 remarks?: string;
@@ -111,8 +111,9 @@ remarks?: string;
     createdBy?: string;
     decidedBy?: string;
     status: "Draft" | "Pending Recount" | "Recount" | "Pending" | "Pending SC" | "Pending Admin" | "Approved" | "Rejected";
-    countType?: "WEEKLY" | "MONTHLY" | "SPOT" | "MONTHLY_FULL" | "CYCLE";
+    countType?: "WEEKLY" | "WEEKLY_FULL" | "MONTHLY" | "SPOT" | "MONTHLY_FULL" | "CYCLE";
     snapshotAt?: string;
+    countedAt?: string;
     checkedAt?: string;
     checkedBy?: string;
     lines: Array<{
@@ -606,7 +607,7 @@ function validState(value: unknown): value is StatePayload {
       !["Active", "On Progress", "Handover", "Defect", "Not Active"].includes(
   site.status,
 )||
-!["Standard", "Non-Standard"].includes(site.costCodeStandard)
+site.costCodeStandard != null && !["Standard", "Non-Standard"].includes(site.costCodeStandard)
     )
       return false;
     siteCodes.add(site.code);
@@ -669,8 +670,8 @@ function validState(value: unknown): value is StatePayload {
 ].includes(
           session.status,
         ) ||
-        (session.countType != null && !["WEEKLY", "MONTHLY", "SPOT", "MONTHLY_FULL", "CYCLE"].includes(session.countType)) ||
-        (session.status !== "Draft" && (!session.snapshotAt || isNaN(Date.parse(session.snapshotAt)))) ||
+        (session.countType != null && !["WEEKLY", "WEEKLY_FULL", "MONTHLY", "SPOT", "MONTHLY_FULL", "CYCLE"].includes(session.countType)) ||
+        (session.status !== "Draft" && (!(session.snapshotAt ?? session.countedAt) || isNaN(Date.parse((session.snapshotAt ?? session.countedAt)!)))) ||
         !Array.isArray(session.lines) ||
         session.lines.some(
           (line) =>
