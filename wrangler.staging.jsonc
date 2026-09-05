@@ -10,7 +10,7 @@
 	"preview_urls": true,
 	"vars": {
 		"ENVIRONMENT": "staging",
-		"RELEASE_VERSION": "V96-RC5"
+		"RELEASE_VERSION": "V100-OFFICIAL"
 	},
 	"assets": {
 		"directory": "dist/client"
