@@ -1792,13 +1792,13 @@ if (
       { error: "Reserved transfer quantity exceeds source On Hand stock" },
       { status: 409 },
     );
+  if (!changed(previous, next))
+    return Response.json({ revision: current.revision });
   if (!authorize(user.role, user.siteAccess, previous, next, user.username))
     return Response.json(
       { error: "Your role is not allowed to make this change" },
       { status: 403 },
     );
-  if (!changed(previous, next))
-    return Response.json({ revision: current.revision });
   const nextRevision = current.revision + 1;
   const now = new Date().toISOString();
   const action = actionName(previous, next);
